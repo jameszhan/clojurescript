@@ -4,14 +4,14 @@ ClojureScript is a new compiler for [Clojure](http://clojure.org) that targets J
 
 ## Releases and dependency information ##
 
-Latest stable release: 0.0-2913
+Latest stable release: 0.0-3308
 
 * [All released versions](http://search.maven.org/#search%7Cgav%7C1%7Cg%3A%22org.clojure%22%20AND%20a%3A%22clojurescript%22)
 
 [Leiningen](http://github.com/technomancy/leiningen/) dependency information:
 
 ```
-[org.clojure/clojurescript "0.0-2913"]
+[org.clojure/clojurescript "0.0-3308"]
 ```
 
 [Maven](http://maven.apache.org) dependency information:
@@ -20,7 +20,7 @@ Latest stable release: 0.0-2913
 <dependency>
   <groupId>org.clojure</groupId>
   <artifactId>clojurescript</artifactId>
-  <version>0.0-2913</version>
+  <version>0.0-3308</version>
 </dependency>
 ```
 
@@ -31,14 +31,21 @@ Latest stable release: 0.0-2913
 * Read the [Quick Start](https://github.com/clojure/clojurescript/wiki/Quick-Start) guide.
 * Read the [Documentation](https://github.com/clojure/clojurescript/wiki).
 * Try a [tutorial](https://github.com/clojure/clojurescript/wiki).
-* Look at the [Sample Applications](https://github.com/clojure/clojurescript/tree/master/samples).
 * [Companies using ClojureScript](https://github.com/clojure/clojurescript/wiki/Companies-Using-ClojureScript)
 
 ## Questions, Feedback? ##
 
-Please point all of your questions and feedback
-to the [Clojure mailing list](http://groups.google.com/group/clojure). There
-is also a community run [ClojureScript user mailing list](http://groups.google.com/group/clojurescript). The Jira bug/feature tracking application is located at <http://dev.clojure.org/jira/browse/CLJS>.
+Please point all of your questions and feedback to the
+[Clojure mailing list](http://groups.google.com/group/clojure). There
+is a community run
+[ClojureScript user mailing list](http://groups.google.com/group/clojurescript) and
+the IRC channel, `#clojurescript` on [freenode.net](https://freenode.net/), is quite active. 
+There is also a community run [Slack channel](http://clojurians.slack.com). The
+Jira bug/feature tracking application is located at
+<http://dev.clojure.org/jira/browse/CLJS>. Before submitting issues
+please read the
+[Reporting Issues](https://github.com/clojure/clojurescript/wiki/Reporting-Issues)
+page first.
 
 ## Developers Welcome ##
 
