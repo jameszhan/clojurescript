@@ -1,46 +1,18 @@
+/**
+ * Copyright (c) Rich Hickey. All rights reserved.
+ * The use and distribution terms for this software are covered by the
+ * Eclipse Public License 1.0 (http://opensource.org/licenses/eclipse-1.0.php)
+ * which can be found in the file epl-v10.html at the root of this distribution.
+ * By using this software in any fashion, you are agreeing to be bound by
+ * the terms of this license.
+ * You must not remove this notice, or any other, from this software.
+ */
+
 Math.imul = function(a, b) {};
 
-var cljs = {};
-cljs.core = {};
-/**
- * @constructor;
- */
-cljs.core.Iterator = function() {};
-cljs.core.Iterator.prototype.next = function() {};
-
-/**
- * @constructor;
- */
-function IteratorStep() {};
-/**
- * @type {boolean}
- */
-IteratorStep.prototype.done;
-/**
- * @type {Object}
- */
-IteratorStep.prototype.value;
-
-/**
- * @constructor;
- */
-function Map() {};
-Map.prototype.keys = function() {};
-Map.prototype.entries = function() {};
-Map.prototype.values = function() {};
-Map.prototype.has = function(k) {};
-Map.prototype.get = function(k) {};
-Map.prototype.forEach = function(f) {};
-
-/**
- * @constructor;
- */
-function Set() {};
-Set.prototype.keys = function() {};
-Set.prototype.entries = function() {};
-Set.prototype.values = function() {};
-Set.prototype.has = function(k) {};
-Set.prototype.forEach = function(f) {};
+Object.prototype.done;
+Object.prototype.value;
+Object.prototype.next = function() {};
 
 /**
  * @constructor;

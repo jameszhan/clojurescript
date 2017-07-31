@@ -2,12 +2,16 @@
 
 set -e
 
-CLOJURE_RELEASE="1.7.0-RC1"
-CLOSURE_RELEASE="20150609"
+CLOJURE_RELEASE="1.9.0-alpha17"
+SPEC_ALPHA_RELEASE="0.1.123"
+CORE_SPECS_ALPHA_RELEASE="0.1.10"
+CLOSURE_RELEASE="20170626"
 DJSON_RELEASE="0.2.6"
-GCLOSURE_LIB_RELEASE="0.0-20150505-021ed5b3"
+TRANSIT_RELEASE="0.8.300"
+GCLOSURE_LIB_RELEASE="0.0-20160609-f42b4a24"
 RHINO_RELEASE="1_7R5"
-TREADER_RELEASE="0.9.2"
+TREADER_RELEASE="1.0.3"
+TEST_CHECK_RELEASE="0.10.0-alpha2"
 
 # check dependencies
 curl -V >/dev/null  || { echo "cURL is missing, or not on your system path."; exit 1; }
@@ -26,12 +30,33 @@ rm -rf clojure-$CLOJURE_RELEASE/
 echo "Cleaning up Clojure archive..."
 rm clojure-$CLOJURE_RELEASE.zip
 
+echo "Fetching specs.alpha...."
+curl --retry 3 -O -s https://repo1.maven.org/maven2/org/clojure/spec.alpha/$SPEC_ALPHA_RELEASE/spec.alpha-$SPEC_ALPHA_RELEASE.jar || { echo "Download failed."; exit 1; }
+echo "Copying spec.alpha-$SPEC_ALPHA_RELEASE/spec.alpha-$SPEC_ALPHA_RELEASE.jar to lib/spec.alpha.jar..."
+cp spec.alpha-$SPEC_ALPHA_RELEASE.jar lib/spec.alpha-$SPEC_ALPHA_RELEASE.jar
+echo "Cleaning up spec.alpha..."
+rm spec.alpha-$SPEC_ALPHA_RELEASE.jar
+
+echo "Fetching core.specs.alpha...."
+curl --retry 3 -O -s https://repo1.maven.org/maven2/org/clojure/core.specs.alpha/$CORE_SPECS_ALPHA_RELEASE/core.specs.alpha-$CORE_SPECS_ALPHA_RELEASE.jar || { echo "Download failed."; exit 1; }
+echo "Copying core.specs.alpha-$CORE_SPECS_ALPHA_RELEASE/core.specs.alpha-$CORE_SPECS_ALPHA_RELEASE.jar to lib/core.specs.alpha.jar..."
+cp core.specs.alpha-$CORE_SPECS_ALPHA_RELEASE.jar lib/core.specs.alpha-$CORE_SPECS_ALPHA_RELEASE.jar
+echo "Cleaning up core.specs.alpha..."
+rm core.specs.alpha-$CORE_SPECS_ALPHA_RELEASE.jar
+
 echo "Fetching data.json..."
 curl --retry 3 -O -s https://repo1.maven.org/maven2/org/clojure/data.json/$DJSON_RELEASE/data.json-$DJSON_RELEASE.jar || { echo "Download failed."; exit 1; }
 echo "Copying data.json-$DJSON_RELEASE.jar to lib/data.json-$DJSON_RELEASE.jar..."
 cp data.json-$DJSON_RELEASE.jar lib/data.json-$DJSON_RELEASE.jar
 echo "Cleaning up data.json..."
 rm data.json-$DJSON_RELEASE.jar
+
+echo "Fetching transit-clj..."
+curl --retry 3 -O -s https://repo1.maven.org/maven2/com/cognitect/transit-clj/$TRANSIT_RELEASE/transit-clj-$TRANSIT_RELEASE.jar || { echo "Download failed."; exit 1; }
+echo "Copying transit-clj-$TRANSIT_RELEASE.jar to lib/transit-clj-$TRANSIT_RELEASE.jar..."
+cp transit-clj-$TRANSIT_RELEASE.jar lib/transit-clj-$TRANSIT_RELEASE.jar
+echo "Cleaning up data.json..."
+rm transit-clj-$TRANSIT_RELEASE.jar
 
 echo "Fetching Google Closure library..."
 mkdir -p closure/library
@@ -89,12 +114,18 @@ echo "Cleaning up Rhino archive..."
 rm rhino$RHINO_RELEASE.zip
 
 echo "Copying closure/compiler/compiler.jar to lib/compiler.jar"
-cp closure/compiler/compiler.jar lib
+cp closure/compiler/closure-compiler-v$CLOSURE_RELEASE.jar lib
 
 echo "Fetching tools.reader $TREADER_RELEASE ..."
 curl --retry 3 -O -s https://repo1.maven.org/maven2/org/clojure/tools.reader/$TREADER_RELEASE/tools.reader-$TREADER_RELEASE.jar || { echo "Download failed."; exit 1; }
 
 echo "Moving tools.reader.jar to lib/tools.reader.jar"
 mv tools.reader-$TREADER_RELEASE.jar lib/tools.reader-$TREADER_RELEASE.jar
+
+echo "Fetching test.check $TEST_CHECK_RELEASE ..."
+curl --retry 3 -O -s https://repo1.maven.org/maven2/org/clojure/test.check/$TEST_CHECK_RELEASE/test.check-$TEST_CHECK_RELEASE.jar || { echo "Download failed."; exit 1; }
+
+echo "Moving test.check.jar to lib/test.check.jar"
+mv test.check-$TEST_CHECK_RELEASE.jar lib/test.check.jar
 
 echo "[Bootstrap Completed]"

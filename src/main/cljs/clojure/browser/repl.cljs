@@ -17,8 +17,9 @@
   clojure.browser.repl
   (:require [goog.dom :as gdom]
             [goog.object :as gobj]
+            [goog.array :as garray]
             [goog.userAgent.product :as product]
-            [clojure.browser.net   :as net]
+            [clojure.browser.net :as net]
             [clojure.browser.event :as event]
             ;; repl-connection callback will receive goog.require('cljs.repl')
             ;; and monkey-patched require expects to be able to derive it
@@ -27,10 +28,21 @@
             [cljs.repl]))
 
 (def xpc-connection (atom nil))
+(def print-queue (array))
+
+(defn flush-print-queue! [conn]
+  (doseq [str print-queue]
+    (net/transmit conn :print str))
+  (garray/clear print-queue))
 
 (defn repl-print [data]
-  (if-let [conn @xpc-connection]
-    (net/transmit conn :print (pr-str data))))
+  (.push print-queue (pr-str data))
+  (when-let [conn @xpc-connection]
+    (flush-print-queue! conn)))
+
+(set! *print-fn* repl-print)
+(set! *print-err-fn* repl-print)
+(set! *print-newline* true)
 
 (defn get-ua-product []
   (cond
@@ -119,6 +131,8 @@
     (set! (.-require__ js/goog) js/goog.require)
     ;; suppress useless Google Closure error about duplicate provides
     (set! (.-isProvided_ js/goog) (fn [name] false))
+    ;; provide cljs.user
+    (goog/constructNamespace_ "cljs.user")
     (set! (.-writeScriptTag__ js/goog)
       (fn [src opt_sourceText]
         ;; the page is already loaded, we can no longer leverage document.write
@@ -157,7 +171,7 @@
           (set! (.-cljsReloadAll_ js/goog) true))
         (let [reload? (or reload (.-cljsReloadAll__ js/goog))]
           (when reload?
-            (let [path (aget js/goog.dependencies_.nameToPath src)]
+            (let [path (gobj/get js/goog.dependencies_.nameToPath src)]
               (gobj/remove js/goog.dependencies_.visited path)
               (gobj/remove js/goog.dependencies_.written path)
               (gobj/remove js/goog.dependencies_.written

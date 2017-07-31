@@ -14,7 +14,8 @@
             [cljs.closure :as closure]
             [cljs.analyzer :as ana]
             [cljs.repl :as repl]
-            [cljs.util :as util])
+            [cljs.util :as util]
+            [cljs.stacktrace :as st])
   (:import [java.io File Reader]
            [org.mozilla.javascript Context ScriptableObject
                                    RhinoException Undefined]))
@@ -38,7 +39,7 @@
   String
   (-eval [this {:keys [cx scope]} filename line]
     (.evaluateString cx scope this filename line nil))
-  
+
   Reader
   (-eval [this {:keys [cx scope]} filename line]
     (.evaluateReader cx scope this filename line nil)))
@@ -123,6 +124,8 @@
       (Context/javaToJS opts scope))
     (ScriptableObject/putProperty scope
       "out" (Context/javaToJS *out* scope))
+    (ScriptableObject/putProperty scope
+      "err" (Context/javaToJS *err* scope))
 
     ;; define file loading, load goog.base, load repl deps
     (rhino-eval repl-env "bootjs" 1 bootjs)
@@ -134,7 +137,8 @@
     (repl/evaluate-form repl-env env "<cljs repl>"
       '(do
          (.require js/goog "cljs.core")
-         (set! *print-fn* (fn [x] (.write js/out x)))))
+         (set! *print-fn* (fn [x] (.write js/out x)))
+         (set! *print-err-fn* (fn [x] (.write js/err x)))))
 
     ;; allow namespace reloading
     (repl/evaluate-form repl-env env "<cljs repl>"
@@ -149,14 +153,19 @@
              (when (or (not (contains? *loaded-libs* name)) reload)
                (set! *loaded-libs* (conj (or *loaded-libs* #{}) name))
                (js/CLOSURE_IMPORT_SCRIPT
-                 (aget (.. js/goog -dependencies_ -nameToPath) name)))))))))
+                 (goog.object/get (.. js/goog -dependencies_ -nameToPath) name)))))))))
 
 ;; Catching errors and rethrowing in Rhino swallows the original trace
 ;; https://groups.google.com/d/msg/mozilla.dev.tech.js-engine.rhino/inMyVKhPq6M/cY39hX20_z8J
 (defn wrap-fn [form]
   (cond
-    (and (seq? form) (= 'ns (first form))) identity
+    (and (seq? form)
+      (#{'ns 'require 'require-macros
+         'use 'use-macros 'import 'refer-clojure} (first form)))
+    identity
+
     ('#{*1 *2 *3 *e} form) (fn [x] `(cljs.core.pr-str ~x))
+
     :else
     (fn [x]
       `(cljs.core.pr-str
@@ -172,22 +181,9 @@
     {:output-dir ".cljs_rhino_repl"
      :wrap wrap-fn})
   repl/IParseStacktrace
-  (-parse-stacktrace [this frames-str ret {output-dir :output-dir}]
-    (vec
-      (map
-        (fn [frame-str]
-          (let [[file-side line-fn-side] (string/split frame-str #":")
-                file (string/replace file-side #"\s+at\s+" "")
-                [line function] (string/split line-fn-side #"\s+")]
-            {:file (string/replace file (str output-dir File/separator) "")
-             :function (when function
-                         (-> function
-                           (string/replace "(" "")
-                           (string/replace ")" "")))
-             :line (when line
-                     (Integer/parseInt line))
-             :column 0}))
-        (string/split frames-str #"\n"))))
+  (-parse-stacktrace [this frames-str ret opts]
+    (st/parse-stacktrace this frames-str
+      (assoc ret :ua-product :rhino) opts))
   repl/IGetError
   (-get-error [this e env opts]
     (let [{:keys [scope]} this
@@ -263,5 +259,5 @@
 
   (load-namespace 'goog.date.Date)
   (goog.date.Date.)
- 
+
   )

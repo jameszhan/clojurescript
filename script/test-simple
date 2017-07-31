@@ -2,13 +2,20 @@
 
 # stop blowing compiled stuff
 rm -rf builds/out-simp
+rm -rf package.json
+rm -rf package-lock.json
+
+echo {} > package.json
 mkdir -p builds/out-simp
 
-possible=4
+possible=5
 ran=0
 
 #bin/cljsc test >out/core-test.js
-bin/cljsc test "{:optimizations :simple :static-fns true :output-dir \"builds/out-simp\" :cache-analysis true :output-wrapper true :compiler-stats true}" > builds/out-simp/core-simple-test.js
+if ! bin/cljsc src/test/cljs  "{:optimizations :simple :static-fns true :output-dir \"builds/out-simp\" :cache-analysis true :output-wrapper true :verbose true :compiler-stats true :npm-deps {:lodash \"4.17.4\"} :closure-warnings {:non-standard-jsdoc :off :global-this :off} :install-deps true :foreign-libs [{:file \"src/test/cljs/calculator_global.js\" :provides [\"calculator\"] :global-exports {calculator Calculator}}]}" > builds/out-simp/core-simple-test.js; then
+  >&2 echo ClojureScript compilation failed
+  exit 1
+fi;
 
 if [ "$V8_HOME" = "" ]; then
   echo "V8_HOME not set, skipping V8 tests"
@@ -26,20 +33,27 @@ else
   ran=$[ran+1]
 fi
 
-# commented out because of memory issue in JSC w/ nested fn calls - David
-#if [ "$JSC_HOME" = "" ]; then
-#  echo "JSC_HOME not set, skipping JavaScriptCore tests"
-#else
-#  echo "Testing with JavaScriptCore"
-#  "${JSC_HOME}/jsc" -f builds/out-simp/core-simple-test.js
-#  ran=$[ran+1]
-#fi
+if ! hash jsc 2>/dev/null; then
+ echo "jsc not on path, skipping JavaScriptCore tests"
+else
+ echo "Testing with JavaScriptCore"
+ jsc -f builds/out-simp/core-simple-test.js
+ ran=$[ran+1]
+fi
 
 if [ "$NASHORN_HOME" = "" ]; then
   echo "NASHORN_HOME not set, skipping Nashorn tests"
 else
   echo "Testing with Nashorn"
   "${NASHORN_HOME}/jjs" builds/out-simp/core-simple-test.js
+  ran=$[ran+1]
+fi
+
+if [ "$CHAKRACORE_HOME" = "" ]; then
+  echo "CHAKRACORE_HOME not set, skipping ChakraCore tests"
+else
+  echo "Testing with ChakraCore"
+  "${CHAKRACORE_HOME}/ch" builds/out-simp/core-simple-test.js
   ran=$[ran+1]
 fi
 

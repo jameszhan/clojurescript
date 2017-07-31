@@ -322,6 +322,26 @@
 (simple-benchmark [r r] (last r) 1)
 (println)
 
+(println ";; iterators")
+(def ipmap (apply hash-map (range 2000)))
+
+(println ";; Sequence iterator")
+(simple-benchmark [s (seq ipmap)]
+                  (let [iter (seq-iter s)]
+                    (loop [v nil]
+                      (if (.hasNext iter)
+                        (recur (.next iter))
+                        v)))
+                  1000)
+(println ";; Direct iterator")
+(simple-benchmark []
+                  (let [iter (-iterator ipmap)]
+                    (loop [v nil]
+                      (if (.hasNext iter)
+                        (recur (.next iter))
+                        v)))
+                  1000)
+
 (println ";;; comprehensions")
 (simple-benchmark [xs (range 512)] (last (for [x xs y xs] (+ x y))) 1)
 (simple-benchmark [xs (vec (range 512))] (last (for [x xs y xs] (+ x y))) 4)
@@ -359,3 +379,21 @@
 (simple-benchmark [f array] (f 1 2 3 4 5 6 7 8 9 0) 100000)
 (simple-benchmark [f vector] (f 1 2 3 4 5 6 7 8 9 0) 100000)
 (simple-benchmark [] (= 1 1 1 1 1 1 1 1 1 0) 100000)
+
+(println "\n")
+(println ";; Destructuring a sequence")
+(simple-benchmark [v (into [] (range 1000000))]
+                  (loop [[x & xs] v]
+                    (if-not (nil? xs)
+                      (recur xs)
+                      x))
+                  10)
+
+(println "\n")
+(println ";;; str")
+(simple-benchmark [] (str 1) 1000000)
+(simple-benchmark [] (str nil) 1000000)
+(simple-benchmark [] (str "1") 1000000)
+(simple-benchmark [] (str "1" "2") 1000000)
+(simple-benchmark [] (str "1" "2" "3") 1000000)
+(println)

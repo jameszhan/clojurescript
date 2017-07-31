@@ -3,7 +3,7 @@
 rm -rf builds/out-adv-bench
 mkdir -p builds/out-adv-bench
 
-bin/cljsc benchmark "{:optimizations :advanced :output-wrapper true :compiler-stats true}" > builds/out-adv-bench/core-advanced-benchmark.js
+bin/cljsc benchmark "{:optimizations :advanced :output-wrapper true :compiler-stats true :verbose true :output-dir \"builds/out-adv-bench\"}" > builds/out-adv-bench/core-advanced-benchmark.js
 
 if [ "$V8_HOME" = "" ]; then
   echo "V8_HOME not set, skipping V8 benchmarks"
@@ -19,11 +19,11 @@ else
   "${SPIDERMONKEY_HOME}/js" -f builds/out-adv-bench/core-advanced-benchmark.js
 fi
 
-if [ "$JSC_HOME" = "" ]; then
-  echo "JSC_HOME not set, skipping JavaScriptCore benchmarks"
+if ! hash jsc 2>/dev/null; then
+  echo "jsc not on path, skipping JavaScriptCore benchmarks"
 else
   echo "Benchmarking with JavaScriptCore"
-  "${JSC_HOME}/jsc" -f builds/out-adv-bench/core-advanced-benchmark.js
+  jsc -f builds/out-adv-bench/core-advanced-benchmark.js
 fi
 
 if [ "$NASHORN_HOME" = "" ]; then
@@ -31,4 +31,11 @@ if [ "$NASHORN_HOME" = "" ]; then
 else
   echo "Benchmarking with Nashorn"
   "${NASHORN_HOME}/jjs" builds/out-adv-bench/core-advanced-benchmark.js
+fi
+
+if [ "$CHAKRACORE_HOME" = "" ]; then
+  echo "CHAKRACORE_HOME not set, skipping ChakraCore benchmarks"
+else
+  echo "Benchmarking with ChakraCore"
+  "${CHAKRACORE_HOME}/ch" builds/out-adv-bench/core-advanced-benchmark.js
 fi

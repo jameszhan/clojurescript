@@ -9,7 +9,8 @@
 (ns ^{:doc "A namespace that exists solely to provide a place for \"compiler\"
 state that is accessed/maintained by many different components."}
   cljs.env
-  (:require [cljs.js-deps :refer (js-dependency-index)])
+  #?(:clj (:require [cljs.js-deps :as deps]
+                    [cljs.externs :as externs]))
   (:refer-clojure :exclude [ensure]))
 
 ;; bit of a misnomer, but: an atom containing a map that serves as the bag of
@@ -29,6 +30,10 @@ state that is accessed/maintained by many different components."}
 ;; * :cljs.analyzer/constant-table - map of (currently only keyword) constant
 ;;   values to fixed ids
 ;; * :cljs.analyzer/namespaces - map of symbols to "namespace" maps
+;; * :cljs.analyzer/data-readers - literal map of symbols, where the first
+;;   symbol in each pair is a tag that will be recognized by the reader. The
+;;   second symbol in the pair is the fully-qualified name of a Var which will
+;;   be invoked by the reader to parse the form following the tag.
 ;; * :cljs.compiler/compiled-cljs - cache of intermediate compilation results
 ;;   that speeds incremental builds in conjunction with source map generation
 ;; * :cljs.closure/compiled-cljs - cache from js file path to map of
@@ -41,31 +46,43 @@ state that is accessed/maintained by many different components."}
 (defn default-compiler-env
   ([] (default-compiler-env {}))
   ([options]
-     (atom {:options options
-            :js-dependency-index (js-dependency-index options)})))
+   (atom
+     (merge
+       {:cljs.analyzer/namespaces {'cljs.user {:name 'cljs.user}}
+        :cljs.analyzer/constant-table {}
+        :cljs.analyzer/data-readers {}
+        :cljs.analyzer/externs #?(:clj  (when (:infer-externs options)
+                                          (externs/externs-map (:externs-sources options)))
+                                  :cljs nil)
+        :options options}
+       #?@(:clj [(when (= (:target options) :nodejs)
+                   {:node-module-index deps/native-node-modules})
+                 {:js-dependency-index (deps/js-dependency-index options)}])))))
 
-(defmacro with-compiler-env
-  "Evaluates [body] with [env] bound as the value of the `*compiler*` var in
-this namespace."
-  [env & body]
-  `(let [env# ~env
-         env# (cond
-               (map? env#) (atom env#)
-               (and (instance? clojure.lang.Atom env#)
-                    (map? @env#)) env#
-               :default (throw (IllegalArgumentException.
-                                (str "Compiler environment must be a map or atom containing a map, not "
-                                     (class env#)))))]
-     (binding [*compiler* env#] ~@body)))
+#?(:clj
+   (defmacro with-compiler-env
+     "Evaluates [body] with [env] bound as the value of the `*compiler*` var in
+   this namespace."
+     [env & body]
+     `(let [env# ~env
+            env# (cond
+                   (map? env#) (atom env#)
+                   (and (instance? clojure.lang.Atom env#)
+                        (map? @env#)) env#
+                   :default (throw (IllegalArgumentException.
+                                     (str "Compiler environment must be a map or atom containing a map, not "
+                                       (class env#)))))]
+        (binding [*compiler* env#] ~@body))))
 
-(defmacro ensure
-  [& body]
-  `(let [val# *compiler*]
-     (if (nil? val#)
-       (push-thread-bindings
-         (hash-map (var *compiler*) (default-compiler-env))))
-     (try
-       ~@body
-       (finally
-         (if (nil? val#)
-           (pop-thread-bindings))))))
+#?(:clj
+   (defmacro ensure
+     [& body]
+     `(let [val# *compiler*]
+        (if (nil? val#)
+          (push-thread-bindings
+            (hash-map (var *compiler*) (default-compiler-env))))
+        (try
+          ~@body
+          (finally
+            (if (nil? val#)
+              (pop-thread-bindings)))))))

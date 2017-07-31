@@ -6,21 +6,22 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software
 (ns cljs.build.api
-  "This is intended to be a stable api for those who intend to create
-  tools that use compiler data.
+  "This is intended to be a stable api for those who need programmatic access
+  to ClojureScript's project building facilities.
 
   For example: a build script may need to how to invalidate compiled
   files so that they will be recompiled."
   (:refer-clojure :exclude [compile])
-  (:require [cljs.util :as util]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as string]
+            [clojure.data.json :as json]
+            [cljs.util :as util]
             [cljs.env :as env]
             [cljs.analyzer :as ana]
             [cljs.compiler :as comp]
             [cljs.closure :as closure]
-            [clojure.set :refer [intersection]]
-            [cljs.js-deps :as js-deps]
-            [clojure.java.io :as io])
-  (:import java.io.File))
+            [cljs.js-deps :as js-deps])
+  (:import [java.io File]))
 
 ;; =============================================================================
 ;; Useful Utilities
@@ -32,19 +33,13 @@
   For example:
   (target-file-from-cljs-ns \"resources/out\" 'example.core) ->
   <File: \"resources/out/example/core.js\">"
-  ([ns-sym] (target-file-for-cljs-ns ns-sym nil))
-  ([ns-sym output-dir]
-    (util/to-target-file
-      (util/output-directory {:output-dir output-dir})
-      {:ns ns-sym})))
+  ([ns-sym] (closure/target-file-for-cljs-ns ns-sym nil))
+  ([ns-sym output-dir] (closure/target-file-for-cljs-ns ns-sym output-dir)))
 
 (defn mark-cljs-ns-for-recompile!
   "Backdates a cljs target file so that it the cljs compiler will recompile it."
-  ([ns-sym] (mark-cljs-ns-for-recompile! ns-sym nil))
-  ([ns-sym output-dir]
-    (let [s (target-file-for-cljs-ns output-dir ns-sym)]
-      (when (.exists s)
-        (.setLastModified s 5000)))))
+  ([ns-sym] (closure/mark-cljs-ns-for-recompile! ns-sym nil))
+  ([ns-sym output-dir] (closure/mark-cljs-ns-for-recompile! ns-sym output-dir)))
 
 (defn cljs-dependents-for-macro-namespaces
   "Takes a list of Clojure (.clj) namespaces that define macros and
@@ -56,23 +51,15 @@
   ClojureScript namespaces that require and use the macros from
   'example.macros :
   (cljs-dependents-for-macro-namespaces 'example.macros) ->
-  ('example.core 'example.util)
-
-  This must be called when cljs.env/*compiler* is bound to the
-  compile env that you are inspecting. See cljs.env/with-compile-env."
-  [namespaces]
-  (map :name
-       (let [namespaces-set (set namespaces)]
-         (filter (fn [x] (not-empty
-                         (intersection namespaces-set (-> x :require-macros vals set))))
-                 (vals (:cljs.analyzer/namespaces @env/*compiler*))))))
-
-(defn cljs-ns-dependents
-  "Given a namespace symbol return a seq of all dependent
-  namespaces sorted in dependency order. Will include
-  transient dependents."
-  [ns]
-  (ana/ns-dependents ns))
+  ('example.core 'example.util)"
+  ([namespaces]
+   (closure/cljs-dependents-for-macro-namespaces
+     (if-not (nil? env/*compiler*)
+       env/*compiler*
+       (env/default-compiler-env))
+     namespaces))
+  ([state namespaces]
+   (closure/cljs-dependents-for-macro-namespaces state namespaces)))
 
 (defn parse-js-ns
   "Given a Google Closure style JavaScript file or resource return the namespace
@@ -84,15 +71,32 @@
 (defn ^File src-file->target-file
   "Given a ClojureScript source file return the target file. May optionally
   provide build options with :output-dir specified."
-  ([src] (closure/src-file->target-file src))
-  ([src opts] (closure/src-file->target-file src opts)))
+  ([src] (src-file->target-file src nil))
+  ([src opts]
+   (src-file->target-file
+     (if-not (nil? env/*compiler*)
+       env/*compiler*
+       (env/default-compiler-env opts))
+     src opts))
+  ([state src opts]
+   (env/with-compiler-env state
+     (binding [ana/*cljs-warning-handlers* (:warning-handlers opts ana/*cljs-warning-handlers*)]
+       (closure/src-file->target-file src opts)))))
 
 (defn ^String src-file->goog-require
   "Given a ClojureScript or Google Closure style JavaScript source file return
   the goog.require statement for it."
-  ([src] (closure/src-file->goog-require src))
+  ([src] (src-file->goog-require src nil))
   ([src options]
-    (closure/src-file->goog-require src options)))
+   (src-file->goog-require
+     (if-not (nil? env/*compiler*)
+       env/*compiler*
+       (env/default-compiler-env options))
+     src options))
+  ([state src options]
+   (env/with-compiler-env state
+     (binding [ana/*cljs-warning-handlers* (:warning-handlers options ana/*cljs-warning-handlers*)]
+       (closure/src-file->goog-require src options)))))
 
 ;; =============================================================================
 ;; Main API
@@ -119,7 +123,11 @@
   uri of the corresponding source regardless of the source language extension:
   .cljs, .cljc, .js. Returns a map containing :relative-path a string, and
   :uri a URL."
-  ([ns] (ns->location ns env/*compiler*))
+  ([ns]
+   (ns->location ns
+     (if-not (nil? env/*compiler*)
+       env/*compiler*
+       (env/default-compiler-env))))
   ([ns compiler-env]
    (closure/source-for-namespace ns compiler-env)))
 
@@ -152,12 +160,21 @@
                   (if (sequential? compiled)
                     compiled
                     [compiled])))]
-        (mapcat compile-input xs)))))
+        (mapcat compile-input xs)))
+    (-find-sources [_ opts]
+      (mapcat #(closure/-find-sources % opts) xs))))
 
 (defn compile
   "Given a Compilable, compile it and return an IJavaScript."
-  [opts compilable]
-  (closure/compile compilable opts))
+  ([opts compilable]
+   (compile
+     (if-not (nil? env/*compiler*)
+       env/*compiler*
+       (env/default-compiler-env opts))
+     opts compilable))
+  ([state opts compilable]
+   (env/with-compiler-env state
+     (closure/compile compilable opts))))
 
 (defn output-unoptimized
   "Ensure that all JavaScript source files are on disk (not in jars),
@@ -172,21 +189,103 @@
 (defn build
   "Given a source which can be compiled, produce runnable JavaScript."
   ([source opts]
-   (closure/build source opts))
+   (build source opts
+     (if-not (nil? env/*compiler*)
+       env/*compiler*
+       (env/default-compiler-env
+         ;; need to dissoc :foreign-libs since we won't know what overriding
+         ;; foreign libspecs are referring to until after add-implicit-options
+         ;; - David
+         (closure/add-externs-sources (dissoc opts :foreign-libs))))))
   ([source opts compiler-env]
-   (closure/build source opts compiler-env)))
+   (doseq [[unknown-opt suggested-opt] (util/unknown-opts (set (keys opts)) closure/known-opts)]
+     (when suggested-opt
+       (println (str "WARNING: Unknown compiler option '" unknown-opt "'. Did you mean '" suggested-opt "'?"))))
+   (binding [ana/*cljs-warning-handlers* (:warning-handlers opts ana/*cljs-warning-handlers*)]
+     (closure/build source opts compiler-env))))
 
 (defn watch
   "Given a source which can be compiled, watch it for changes to produce."
   ([source opts]
-   (closure/watch source opts))
+   (watch source opts
+     (if-not (nil? env/*compiler*)
+       env/*compiler*
+       (env/default-compiler-env
+         (closure/add-externs-sources opts)))))
   ([source opts compiler-env]
-   (closure/watch source opts compiler-env))
+   (watch source opts compiler-env nil))
   ([source opts compiler-env stop]
-   (closure/watch source opts compiler-env stop)))
+   (binding [ana/*cljs-warning-handlers* (:warning-handlers opts ana/*cljs-warning-handlers*)]
+     (closure/watch source opts compiler-env stop))))
+
+;; =============================================================================
+;; Node.js / NPM dependencies
+
+(defn compiler-opts? [m]
+  (and (map? m)
+       (or (contains? m :output-to)
+           (contains? m :modules)
+           (contains? m :npm-deps)
+           (contains? m :main)
+           (contains? m :optimizations)
+           (contains? m :foreign-libs))))
+
+(defn install-node-deps!
+  "EXPERIMENTAL: Install the supplied dependencies via NPM. dependencies must be
+   a map of name to version or a valid compiler options map."
+  ([dependencies]
+   (if (compiler-opts? dependencies)
+     (install-node-deps! (:npm-deps dependencies) dependencies)
+     (install-node-deps! dependencies
+       (when-not (nil? env/*compiler*)
+         (:options @env/*compiler*)))))
+  ([dependencies opts]
+   {:pre [(map? dependencies)]}
+   (closure/check-npm-deps opts)
+   (closure/maybe-install-node-deps!
+     (update-in opts [:npm-deps] merge dependencies))))
+
+(defn get-node-deps
+  "EXPERIMENTAL: Get the Node.js dependency graph of the supplied dependencies.
+   Dependencies must be a sequence of strings or symbols naming packages or paths
+   within packages (e.g. [react \"react-dom/server\"] or a valid compiler options
+   map. Assumes dependencies have been been previously installed, either by
+   `cljs.build.api/install-node-deps!` or by an NPM client, and reside in the
+   `node_modules` directory."
+  ([dependencies]
+   (if (compiler-opts? dependencies)
+     (get-node-deps (keys (:npm-deps dependencies)) dependencies)
+     (get-node-deps dependencies
+       (when-not (nil? env/*compiler*)
+         (:options @env/*compiler*)))))
+  ([dependencies opts]
+   {:pre [(sequential? dependencies)]}
+   (closure/index-node-modules
+     (distinct (concat (keys (:npm-deps opts)) (map str dependencies)))
+     opts)))
 
 (comment
+  (node-module-deps
+    {:file (.getAbsolutePath (io/file "src/test/node/test.js"))})
 
+  (node-module-deps
+    {:file (.getAbsolutePath (io/file "src/test/node/test.js"))})
+  )
+
+(defn node-inputs
+  "EXPERIMENTAL: return the foreign libs entries as computed by running
+   the module-deps package on the supplied JavaScript entry points. Assumes
+   that the `@cljs-oss/module-deps` and `konan` NPM packages are either
+   locally or globally installed."
+  [entries]
+  (closure/node-inputs entries))
+
+(comment
+  (node-inputs
+    [{:file "src/test/node/test.js"}])
+  )
+
+(comment
   (def test-cenv (atom {}))
   (def test-env (assoc-in (ana/empty-env) [:ns :name] 'cljs.user))
 

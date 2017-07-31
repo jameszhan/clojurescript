@@ -1,5 +1,13 @@
+;; Copyright (c) Rich Hickey. All rights reserved.
+;; The use and distribution terms for this software are covered by the
+;; Eclipse Public License 1.0 (http://opensource.org/licenses/eclipse-1.0.php)
+;; which can be found in the file epl-v10.html at the root of this distribution.
+;; By using this software in any fashion, you are agreeing to be bound by
+;; the terms of this license.
+;; You must not remove this notice, or any other, from this software.
+
 (ns cljs.reader-test
-  (:require [cljs.test :refer-macros [deftest testing is]]
+  (:require [cljs.test :refer-macros [deftest testing is] :as test]
             [cljs.reader :as reader]
             [goog.object :as o]))
 
@@ -19,8 +27,10 @@
     (is (= '% (reader/read-string "%")))
     (is (= #{1 2 3} (reader/read-string "#{1 2 3}")))
     (is (= '(7 8 9) (reader/read-string "(7 8 9)")))
-    (is (= '(deref foo) (reader/read-string "@foo")))
-    (is (= '(quote bar) (reader/read-string "'bar")))
+    ;; Another bad test found by switching to tools.reader - David
+    ;(is (= '(deref foo) (reader/read-string "@foo")))
+    ;; Another bad test found by switching to tools.reader - David
+    ;;(is (= 'bar (reader/read-string "'bar")))
     (is (= 'foo/bar (reader/read-string "foo/bar")))
     (is (= \a (reader/read-string "\\a")))
     (is (= {:tag 'String} (meta (reader/read-string "^String {:a 1}"))))
@@ -34,7 +44,7 @@
     (is (= "escape chars \t \r \n \\ \" \b \f" (reader/read-string "\"escape chars \\t \\r \\n \\\\ \\\" \\b \\f\""))))
   
   (testing "Test reading number literals"
-    (is (apply = 0 (map reader/read-string "0" "+0" "-0" " 0 ")))
+    (is (apply = 0 (map reader/read-string ["0" "+0" "-0" " 0 "])))
     (is (apply = 42 (map reader/read-string ["052" "0x2a" "2r101010" "8R52" "16r2a" "36r16"])))
     (is (apply = 42 (map reader/read-string ["+052" "+0x2a" "+2r101010" "+8r52" "+16R2a" "+36r16"])))
     (is (apply = -42 (map reader/read-string ["-052" "-0X2a" "-2r101010" "-8r52" "-16r2a" "-36R16"]))))
@@ -48,7 +58,8 @@
               (reader/read-string "#queue [1 2]"))))
 
   (testing "Test reading comments"
-    (is (nil? (reader/read-string ";foo")))
+    ;; Another bad test found by switching to tools.reader - David
+    ;;(is (nil? (reader/read-string ";foo")))
     (is (= 3 (try
                (reader/read-string ";foo\n3")
                (catch js/Error e :threw))))
@@ -93,6 +104,10 @@
     ;; default tag parser
     (reader/register-default-tag-parser! (fn [tag val] val))
     (is (= [1 2] (reader/read-string "#a.b/c [1 2]"))))
+
+  (testing "Character Literals"
+    (is (= [\tab \return \newline \space \backspace \formfeed \u1234]
+          (reader/read-string "[\\tab \\return \\newline \\space \\backspace \\formfeed \\u1234]"))))
 
   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
   ;; Unicode Tests
@@ -140,6 +155,13 @@
                 :failed-to-throw
                 (catch js/Error e :ok))]
         (is (= r :ok)))))
+
+  (testing "Testing non-string input, CLJS-1342"
+    (let [r (try
+              (reader/read-string :foo)
+              :failed-to-throw
+              (catch js/Error e :ok))]
+      (is (= r :ok))))
 )
 
 (deftest test-717
@@ -148,20 +170,30 @@
     (is (= (alength (reader/read-string "#js [1 2 3]")) 3))
     (is (= (seq (reader/read-string "#js [1 2 3]")) (seq [1 2 3])))
     (is (= (set (js-keys (reader/read-string "#js {:foo \"bar\" :baz \"woz\"}"))) #{"foo" "baz"}))
-    (is (= (aget (reader/read-string "#js {:foo \"bar\"}") "foo") "bar"))
-    (is (= (aget (reader/read-string "#js {\"foo\" \"bar\"}") "foo") "bar"))
-    (is (array? (aget (reader/read-string "#js {\"foo\" #js [1 2 3]}") "foo")))
-    (is (= (seq (aget (reader/read-string "#js {\"foo\" #js [1 2 3]}") "foo")) '(1 2 3)))))
+    (is (= (o/get (reader/read-string "#js {:foo \"bar\"}") "foo") "bar"))
+    (is (= (o/get (reader/read-string "#js {\"foo\" \"bar\"}") "foo") "bar"))
+    (is (array? (o/get (reader/read-string "#js {\"foo\" #js [1 2 3]}") "foo")))
+    (is (= (seq (o/get (reader/read-string "#js {\"foo\" #js [1 2 3]}") "foo")) '(1 2 3)))))
 
 (deftest test-787
   (testing "Testing reading, CLS-787"
     (is (nil? (reader/read-string "")))))
 
-(deftest test-819
-  (let [re (reader/read-string  "#\"\\s\\u00a1\"")
-        m  (re-find re " \u00a1   ")]
-    (testing "Testing reading, CLJS-819"
-      (is (= m " \u00a1")))))
+;; Test doesn't seem relevant now that we rely on tools.reader - David
+;(deftest test-819
+;  (let [re (reader/read-string  "#\"\s\u00a1\"")
+;        m  (re-find re " \u00a1   ")]
+;    (testing "Testing reading, CLJS-819"
+;      (is (= m " \u00a1")))))
+
+(deftest testing-map-type
+  (let [a (reader/read-string "{:a 1 :b 2 :c 3}")
+        b (reader/read-string "{:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8 :i 9}")]
+    (is (= a {:a 1 :b 2 :c 3}))
+    ;; Needs fix to cljs.tools.reader.edn - David
+    (is (instance? PersistentArrayMap a))
+    (is (= b {:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8 :i 9}))
+    (is (instance? PersistentHashMap b))))
 
 ;; NOTE: issue uncovered by test.check
 
@@ -170,3 +202,37 @@
     (testing "Testing '/ reading"
       (is (= x (reader/read-string (pr-str x))))
       (is (= (reader/read-string (pr-str x)) x)))))
+
+(deftest testing-cljs-1823
+  (let [;; PersistentArrayMap
+        a (try
+            (reader/read-string "{:a 1 :b 2 :c 3 :a 1}")
+            :failed-to-throw
+            (catch js/Error e (ex-message e)))
+        ;; PersistentHashMap
+        b (try
+            (reader/read-string "{:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :h 7 :i 8 :a 1}")
+            :failed-to-throw
+            (catch js/Error e (ex-message e)))
+        ;; PersistentArrayMap backed PHS
+        c (try
+            (reader/read-string "#{:a :b :c :d :a}")
+            :failed-to-throw
+            (catch js/Error e (ex-message e)))
+        ;; PersistentHashMap backed PHS
+        d (try
+            (reader/read-string "#{:a :b :c :d :e :f :g :h :i :a}")
+            :failed-to-throw
+            (catch js/Error e (ex-message e)))
+        ]
+    (is (= "Map literal contains duplicate key: :a" a))
+    (is (= "Map literal contains duplicate key: :a" b))
+    ;; Waiting on tools.reader fixes - David
+    (is (= "Set literal contains duplicate key: :a" c))
+    (is (= "Set literal contains duplicate key: :a" d))
+    ))
+
+;; Not relevant now that we rely on tools.reader and it duplicates Clojure's behavior - David
+;(deftest test-error-messages
+;  (testing "Leading numbers in keywords"
+;    (is (thrown-with-msg? js/Error #"Invalid keyword :0s" (reader/read-string ":0s")))))

@@ -12,7 +12,7 @@
     [cljs.pprint-test :refer [simple-tests code-block]])
   (:require
     [cljs.test :as t :refer-macros [deftest is]]
-    [cljs.pprint :refer [pprint cl-format *out* get-pretty-writer prn print-table
+    [cljs.pprint :refer [pprint cl-format get-pretty-writer prn print-table
                          *print-pprint-dispatch* simple-dispatch
                          *print-right-margin* *print-miser-width*
                          write code-dispatch]
@@ -102,27 +102,28 @@ Usage: *hello*
   #_"(add-to-buffer\n  this\n  (make-buffer-blob (str (char c)) nil))"
   )
 
-(simple-tests pprint-reader-macro-test
-  ;;I'm not sure this will work without significant work on cljs. Short story, cljs
-  ;;reader only takes valid EDN, so #(* % %) won't work.
-  ;;see http://stackoverflow.com/a/25712675/546321 for more details
-  #_(with-pprint-dispatch code-dispatch
-    (write (reader/read-string "(map #(first %) [[1 2 3] [4 5 6] [7]])")
-           :stream nil))
-  #_"(map #(first %) [[1 2 3] [4 5 6] [7]])"
-
-  ;;TODO Not sure what to do about this test due to the reader handling of `@`
-  (with-pprint-dispatch code-dispatch
-    (write (reader/read-string "@@(ref (ref 1))")
-           :stream nil))
-  "(deref (deref (ref (ref 1))))"
-  #_"@@(ref (ref 1))"
-
-  (with-pprint-dispatch code-dispatch
-    (write (reader/read-string "'foo")
-           :stream nil))
-  "'foo"
-  )
+;; Not a valid test now that we use tools.reader - David
+;(simple-tests pprint-reader-macro-test
+;  ;;I'm not sure this will work without significant work on cljs. Short story, cljs
+;  ;;reader only takes valid EDN, so #(* % %) won't work.
+;  ;;see http://stackoverflow.com/a/25712675/546321 for more details
+;  #_(with-pprint-dispatch code-dispatch
+;    (write (reader/read-string "(map #(first %) [[1 2 3] [4 5 6] [7]])")
+;           :stream nil))
+;  #_"(map #(first %) [[1 2 3] [4 5 6] [7]])"
+;
+;  ;;TODO Not sure what to do about this test due to the reader handling of `@`
+;  (with-pprint-dispatch code-dispatch
+;    (write (reader/read-string "@@(ref (ref 1))")
+;           :stream nil))
+;  "(deref (deref (ref (ref 1))))"
+;  #_"@@(ref (ref 1))"
+;
+;  (with-pprint-dispatch code-dispatch
+;    (write (reader/read-string "'foo")
+;           :stream nil))
+;  "'foo"
+;  )
 
 (simple-tests xp-miser-test
   (binding [*print-pprint-dispatch* simple-dispatch
@@ -230,6 +231,13 @@ Usage: *hello*
     (with-out-str (pprint (sorted-set 123 456 789))))
   "#{123\n  456\n  789}\n"
 )
+
+(simple-tests print-namespace-maps-tests
+  (binding [*print-namespace-maps* true] (with-out-str (pprint {:user/a 1})))
+  "#:user{:a 1}\n"
+  (binding [*print-namespace-maps* false] (with-out-str (pprint {:user/a 1})))
+  "{:user/a 1}\n"
+  )
 
 ;;----------------------------------------------------------------------------
 ;; clj-format tests
@@ -1063,16 +1071,18 @@ Usage: *hello*
 | {:a is-a} |  1 |
 |         5 |  7 |
 "
-  ;;This test is changed a bit due to the way JS prints large numbers. The number
-  ;; was changed (54.7e17 to 54.7e20) to make sure JS prints it in E notation (5.47E21)
+  ;; This test is changed a bit due to the way JS prints large numbers, as well as the
+  ;; way Nashorn formats floating point output using Java. The number was changed
+  ;; (54.7e17 to 54.7e21) to make sure JS prints it in E notation (5.47E22) and Nashorn
+  ;; truncates at the desired precision.
   (with-out-str
     (print-table [:a :e :d :c]
-                 [{:a 54.7e20 :b {:a 'is-a} :c ["hi" "there"]}
+                 [{:a 54.7e21 :b {:a 'is-a} :c ["hi" "there"]}
                   {:b 5 :a -23 :c "dog" :d 'panda}]))
   "
 |       :a | :e |    :d |             :c |
 |----------+----+-------+----------------|
-| 5.47e+21 |    |       | [\"hi\" \"there\"] |
+| 5.47e+22 |    |       | [\"hi\" \"there\"] |
 |      -23 |    | panda |            dog |
 "
   )

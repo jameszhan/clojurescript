@@ -96,29 +96,39 @@
               (.printStackTrace e *err*))))
         (recur buf)))))
 
+(defn- build-process
+  [opts repl-env input-src]
+  (let [xs   (cond-> [(get opts :node-command "node")]
+               (:debug-port repl-env) (conj (str "--debug=" (:debug-port repl-env))))
+        proc (-> (ProcessBuilder. (into-array xs)) (.redirectInput input-src))]
+    (when-let [path-fs (:path repl-env)]
+      (.put (.environment proc)
+            "NODE_PATH"
+            (string/join File/pathSeparator
+                         (map #(.getAbsolutePath (io/as-file %)) path-fs))))
+    proc))
+
 (defn setup
   ([repl-env] (setup repl-env nil))
   ([repl-env opts]
-    (let [output-dir (io/file (util/output-directory opts))
-          _    (.mkdirs output-dir)
-          of   (io/file output-dir "node_repl.js")
-          _   (spit of
-                (string/replace (slurp (io/resource "cljs/repl/node_repl.js"))
-                  "var PORT = 5001;"
-                  (str "var PORT = " (:port repl-env) ";")))
-          proc (-> (ProcessBuilder. (into-array [(get opts :node-command "node")]))
-                 (.redirectInput of)
-                 .start)
-          _ (do (.start (Thread. (bound-fn [] (pipe proc (.getInputStream proc) *out*))))
-                (.start (Thread. (bound-fn [] (pipe proc (.getErrorStream proc) *err*)))))
-          env  (ana/empty-env)
-          core (io/resource "cljs/core.cljs")
+    (let [output-dir   (io/file (util/output-directory opts))
+          _            (.mkdirs output-dir)
+          of           (io/file output-dir "node_repl.js")
+          _            (spit of
+                         (string/replace (slurp (io/resource "cljs/repl/node_repl.js"))
+                           "var PORT = 5001;"
+                           (str "var PORT = " (:port repl-env) ";")))
+          proc         (.start (build-process opts repl-env of))
+          _            (do (.start (Thread. (bound-fn [] (pipe proc (.getInputStream proc) *out*))))
+                           (.start (Thread. (bound-fn [] (pipe proc (.getErrorStream proc) *err*)))))
+          env          (ana/empty-env)
+          core         (io/resource "cljs/core.cljs")
           ;; represent paths as vectors so we can emit JS arrays, this is to
           ;; paper over Windows issues with minimum hassle - David
-          path (.getPath (.getCanonicalFile output-dir))
-          [fc & cs] (rest (util/path-seq path)) ;; remove leading empty string
-          root (.substring path 0 (+ (.indexOf path fc) (count fc)))
-          root-path (vec (cons root cs))
+          path         (.getPath (.getCanonicalFile output-dir))
+          [fc & cs]    (rest (util/path-seq path)) ;; remove leading empty string
+          root         (.substring path 0 (+ (.indexOf path fc) (count fc)))
+          root-path    (vec (cons root cs))
           rewrite-path (conj root-path "goog")]
       (reset! (:proc repl-env) proc)
       (loop [r nil]
@@ -134,9 +144,8 @@
       ;; for bootstrap to load, use new closure/compile as it can handle
       ;; resources in JARs
       (let [core-js (closure/compile core
-                      (assoc opts
-                        :output-file
-                        (closure/src-file->target-file core)))
+                      (assoc (dissoc opts :output-dir)
+                        :output-file (closure/src-file->target-file core)))
             deps    (closure/add-dependencies opts core-js)]
         ;; output unoptimized code and the deps file
         ;; for all compiled namespaces
@@ -169,7 +178,7 @@
         '(set! (.-require js/goog)
            (fn [name]
              (js/CLOSURE_IMPORT_SCRIPT
-               (aget (.. js/goog -dependencies_ -nameToPath) name)))))
+               (unchecked-get (.. js/goog -dependencies_ -nameToPath) name)))))
       ;; load cljs.core, setup printing
       (repl/evaluate-form repl-env env "<cljs repl>"
         '(do
@@ -178,15 +187,16 @@
       ;; redef goog.require to track loaded libs
       (repl/evaluate-form repl-env env "<cljs repl>"
         '(do
+           (set! *target* "nodejs")
            (set! *loaded-libs* #{"cljs.core"})
            (set! (.-require js/goog)
              (fn [name reload]
                (when (or (not (contains? *loaded-libs* name)) reload)
                  (set! *loaded-libs* (conj (or *loaded-libs* #{}) name))
                  (js/CLOSURE_IMPORT_SCRIPT
-                   (aget (.. js/goog -dependencies_ -nameToPath) name))))))))))
+                   (unchecked-get (.. js/goog -dependencies_ -nameToPath) name))))))))))
 
-(defrecord NodeEnv [host port socket proc]
+(defrecord NodeEnv [host port path socket proc]
   repl/IReplEnvOptions
   (-repl-options [this]
     {:output-dir ".cljs_node_repl"
@@ -206,15 +216,17 @@
     (close-socket @socket)))
 
 (defn repl-env* [options]
-  (let [{:keys [host port]}
+  (let [{:keys [host port path debug-port]}
         (merge
           {:host "localhost"
            :port (+ 49000 (rand-int 10000))}
           options)]
-    (NodeEnv. host port (atom nil) (atom nil))))
+    (assoc (NodeEnv. host port path (atom nil) (atom nil))
+      :debug-port debug-port)))
 
 (defn repl-env
-  "Construct a Node.js evalution environment. Can supply :host and :port."
+  "Construct a Node.js evalution environment. Can supply :host, :port
+  and :path (a vector used as the NODE_PATH)."
   [& {:as options}]
   (repl-env* options))
 

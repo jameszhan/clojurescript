@@ -4,15 +4,17 @@
   :url "https://github.com/clojure/clojurescript"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :jvm-opts ^:replace ["-Xmx512m" "-server"]
-  :source-paths ["src/main/clojure"]
+  :jvm-opts ^:replace ["-Dclojure.compiler.direct-linking=true" "-Xmx512m" "-server"]
+  :source-paths ["src/main/clojure" "src/main/cljs"]
   :resource-paths ["src/main/cljs"]
-  :test-paths ["src/test/clojure"]
-  :dependencies [[org.clojure/clojure "1.7.0-RC1"]
+  :test-paths ["src/test/clojure" "src/test/cljs" "src/test/self" "src/test/cljs_cp"]
+  :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/data.json "0.2.6"]
-                 [org.clojure/tools.reader "0.9.2"]
-                 [org.clojure/google-closure-library "0.0-20150505-021ed5b3"]
-                 [com.google.javascript/closure-compiler "v20150609"]
+                 [org.clojure/tools.reader "1.0.3"]
+                 [org.clojure/test.check "0.10.0-alpha2" :scope "test"]
+                 [com.cognitect/transit-clj "0.8.300"]
+                 [org.clojure/google-closure-library "0.0-20170519-fa0499ef"]
+                 [com.google.javascript/closure-compiler-unshaded "v20170626"]
                  [org.mozilla/rhino "1.7R5"]]
   :profiles {:1.6 {:dependencies [[org.clojure/clojure "1.6.0"]]}
              :uberjar {:aot :all :main clojure.main}}
