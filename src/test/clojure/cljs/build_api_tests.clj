@@ -15,15 +15,16 @@
             [clojure.java.shell :as sh]
             [cljs.env :as env]
             [cljs.analyzer :as ana]
+            [cljs.util :as util]
             [cljs.test-util :as test]
             [cljs.build.api :as build]
             [cljs.closure :as closure]))
 
 (deftest test-target-file-for-cljs-ns
   (is (= (.getPath (build/target-file-for-cljs-ns 'example.core-lib nil))
-         "out/example/core_lib.js"))
+        (test/platform-path "out/example/core_lib.js")))
   (is (= (.getPath (build/target-file-for-cljs-ns 'example.core-lib "output"))
-         "output/example/core_lib.js")))
+        (test/platform-path "output/example/core_lib.js"))))
 
 (deftest test-cljs-dependents-for-macro-namespaces
   (env/with-compiler-env (env/default-compiler-env)
@@ -153,6 +154,7 @@
               [{:file (str (io/file root "thirdparty" "add.js"))
                 :provides  ["thirdparty.add"]}]
               :output-dir (str out)
+              :main 'foreign-libs.core
               :target :nodejs}]
     (test/delete-out-files out)
     (build/build (build/inputs (io/file root "foreign_libs") (io/file root "thirdparty")) opts)
@@ -170,14 +172,15 @@
     (test/delete-out-files out)
     (try
       (build/build (build/inputs
-                     (io/file (str root "a.cljs"))
-                     (io/file (str root "b.cljs")))
+                     (io/file root "circular_deps" "a.cljs")
+                     (io/file root "circular_deps" "b.cljs"))
         {:main 'circular-deps.a
          :optimizations :none
          :output-to out})
       (is false)
       (catch Throwable e
-        (is true)))))
+        (is (re-find  #"Circular dependency detected, circular-deps.a -> circular-deps.b -> circular-deps.a"
+              (.getMessage (.getCause e))))))))
 
 (defn loader-test-project [output-dir]
   {:inputs (str (io/file "src" "test" "cljs_build" "loader_test"))
@@ -185,6 +188,11 @@
    {:output-dir output-dir
     :optimizations :none
     :verbose true
+    :foreign-libs [{:file "src/test/cljs_build/loader_test/foreignA.js"
+                    :provides ["foreign.a"]}
+                   {:file "src/test/cljs_build/loader_test/foreignB.js"
+                    :provides ["foreign.b"]
+                    :requires ["foreign.a"]}]
     :modules
     {:foo
      {:output-to (str (io/file output-dir "foo.js"))
@@ -196,39 +204,57 @@
 (deftest cljs-2077-test-loader
   (let [out (.getPath (io/file (test/tmp-dir) "loader-test-out"))]
     (test/delete-out-files out)
-    (let [{:keys [inputs opts]} (merge-with merge (loader-test-project out))
+    (let [{:keys [inputs opts]} (loader-test-project out)
           loader (io/file out "cljs" "loader.js")]
-      (build/build (build/inputs (io/file inputs "bar.cljs") (io/file inputs "foo.cljs")) opts)
+      (build/build (build/inputs inputs) opts)
       (is (.exists loader))
-      (is (not (nil? (re-find #"/loader_test/foo\.js" (slurp loader))))))
+      (is (not (nil? (re-find #"[\\/]loader_test[\\/]foo\.js" (slurp loader))))))
     (test/delete-out-files out)
-    (let [project (merge-with merge (loader-test-project out)
-                    {:opts {:optimizations :advanced
-                            :source-map true}})]
-      (build/build (build/inputs (:inputs project)) (:opts project)))
+    (let [{:keys [inputs opts]} (merge-with merge (loader-test-project out)
+                                  {:opts {:optimizations :advanced
+                                          :source-map true}})]
+      (build/build (build/inputs inputs) opts))
     (testing "string inputs in modules"
       (test/delete-out-files out)
-      (let [project (merge-with merge (loader-test-project out)
-                      {:opts {:optimizations :whitespace}})]
-        (build/build (build/inputs (:inputs project)) (:opts project))))))
+      (let [{:keys [inputs opts]} (merge-with merge (loader-test-project out)
+                                    {:opts {:optimizations :whitespace}})]
+        (build/build (build/inputs inputs) opts)))
+    (testing "CLJS-2309 foreign libs order preserved"
+      (test/delete-out-files out)
+      (let [{:keys [inputs opts]} (merge-with merge (loader-test-project out)
+                                    {:opts {:optimizations :advanced}})]
+        (build/build (build/inputs inputs) opts)
+        (is (not (nil? (re-find #"foreignA[\s\S]+foreignB" (slurp (io/file out "foo.js"))))))))))
+
+(deftest test-npm-deps-simple
+  (test/delete-node-modules)
+  (spit (io/file "package.json") "{}")
+  (let [out (.getPath (io/file (test/tmp-dir) "npm-deps-test-out"))
+        {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                               :opts {:main 'npm-deps-test.core
+                                      :output-dir out
+                                      :optimizations :none
+                                      :install-deps true
+                                      :npm-deps {:left-pad "1.1.3"}
+                                      :foreign-libs [{:module-type :es6
+                                                      :file "src/test/cljs/es6_dep.js"
+                                                      :provides ["es6_calc"]}
+                                                     {:module-type :es6
+                                                      :file "src/test/cljs/es6_default_hello.js"
+                                                      :provides ["es6_default_hello"]}]
+                                      :closure-warnings {:check-types :off}}}
+        cenv (env/default-compiler-env)]
+    (test/delete-out-files out)
+    (build/build (build/inputs (io/file inputs "npm_deps_test/core.cljs")) opts cenv)
+    (is (.exists (io/file out "node_modules/left-pad/index.js")))
+    (is (contains? (:js-module-index @cenv) "left-pad")))
+
+  (.delete (io/file "package.json"))
+  (test/delete-node-modules))
 
 (deftest test-npm-deps
   (test/delete-node-modules)
   (spit (io/file "package.json") "{}")
-  (testing "simplest case, require"
-    (let [out (.getPath (io/file (test/tmp-dir) "npm-deps-test-out"))
-          {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
-                                 :opts {:main 'npm-deps-test.core
-                                        :output-dir out
-                                        :optimizations :none
-                                        :install-deps true
-                                        :npm-deps {:left-pad "1.1.3"}
-                                        :closure-warnings {:check-types :off}}}
-          cenv (env/default-compiler-env)]
-      (test/delete-out-files out)
-      (build/build (build/inputs (io/file inputs "npm_deps_test/core.cljs")) opts cenv)
-      (is (.exists (io/file out "node_modules/left-pad/index.js")))
-      (is (contains? (:js-module-index @cenv) "left-pad"))))
   (let [cenv (env/default-compiler-env)
         out (.getPath (io/file (test/tmp-dir) "npm-deps-test-out"))
         {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
@@ -238,20 +264,21 @@
                                       :install-deps true
                                       :npm-deps {:react "15.6.1"
                                                  :react-dom "15.6.1"
+                                                 :lodash-es "4.17.4"
                                                  :lodash "4.17.4"}
                                       :closure-warnings {:check-types :off
                                                          :non-standard-jsdoc :off}}}]
+    (test/delete-out-files out)
     (testing "mix of symbol & string-based requires"
-      (test/delete-out-files out)
-      (test/delete-node-modules)
       (build/build (build/inputs (io/file inputs "npm_deps_test/string_requires.cljs")) opts cenv)
       (is (.exists (io/file out "node_modules/react/react.js")))
       (is (contains? (:js-module-index @cenv) "react"))
       (is (contains? (:js-module-index @cenv) "react-dom/server")))
+
     (testing "builds with string requires are idempotent"
       (build/build (build/inputs (io/file inputs "npm_deps_test/string_requires.cljs")) opts cenv)
-      (is (not (nil? (re-find #"\.\./node_modules/react-dom/server\.js" (slurp (io/file out "cljs_deps.js"))))))
-      (test/delete-out-files out)))
+      (is (not (nil? (re-find #"\.\.[\\/]node_modules[\\/]react-dom[\\/]server\.js" (slurp (io/file out "cljs_deps.js"))))))))
+
   (.delete (io/file "package.json"))
   (test/delete-node-modules))
 
@@ -386,10 +413,24 @@
     (build/build (build/inputs (io/file inputs "data_readers_test")) opts cenv)
     (is (contains? (-> @cenv ::ana/data-readers) 'test/custom-identity))))
 
+(deftest test-data-readers-records
+  (let [out (.getPath (io/file (test/tmp-dir) "data-readers-test-records-out"))
+        {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs"))
+                               :opts {:main 'data-readers-test.records
+                                      :output-dir out
+                                      :optimizations :none
+                                      :closure-warnings {:check-types :off}}}
+        cenv (env/default-compiler-env)]
+    (test/delete-out-files out)
+    (build/build (build/inputs (io/file inputs "data_readers_test")) opts cenv)
+    (is (true? (boolean (re-find #"data_readers_test.records.map__GT_Foo\("
+                          (slurp (io/file out "data_readers_test" "records.js"))))))))
+
 (deftest test-cljs-2249
   (let [out (io/file (test/tmp-dir) "cljs-2249-out")
         root (io/file "src" "test" "cljs_build")
         opts {:output-dir (str out)
+              :main 'foreign-libs-cljs-2249.core
               :target :nodejs}]
     (test/delete-out-files out)
     (build/build (build/inputs (io/file root "foreign_libs_cljs_2249")) opts)
@@ -402,11 +443,9 @@
   (test/delete-node-modules)
   (.delete (io/file "package-lock.json"))
   (spit (io/file "package.json") (json/json-str {:dependencies {:left-pad "1.1.3"}
-                                                 :devDependencies {"@cljs-oss/module-deps" "*"
-                                                                   :konan "*"
-                                                                   :resolve "*"
-                                                                   :browser-resolve "*"}}))
-  (sh/sh "npm" "install")
+                                                 :devDependencies {"@cljs-oss/module-deps" "*"}}))
+  (apply sh/sh (cond->> ["npm" "install"]
+                 util/windows? (into ["cmd" "/c"])))
   (let [ws (atom [])
         out (.getPath (io/file (test/tmp-dir) "node-modules-opt-test-out"))
         {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
@@ -460,3 +499,130 @@
     (test/delete-out-files out)
     (test/delete-node-modules)
     (.delete (io/file "package.json"))))
+
+(deftest test-cljs-2296
+  (let [out (.getPath (io/file (test/tmp-dir) "cljs-2296-test-out"))
+        {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                               :opts {:main 'foreign_libs_dir_test.core
+                                      :output-dir out
+                                      :optimizations :none
+                                      :target :nodejs
+                                      ;; :file is a directory
+                                      :foreign-libs [{:file "src/test/cljs_build/foreign-libs-dir"
+                                                      :module-type :commonjs}]}}]
+    (test/delete-out-files out)
+    (build/build (build/inputs (io/file inputs "foreign_libs_dir_test/core.cljs")) opts)
+    (is (.exists (io/file out "src/test/cljs_build/foreign-libs-dir/vendor/lib.js")))
+    (is (re-find #"goog\.provide\(\"module\$[A-Za-z0-9$_]+?src\$test\$cljs_build\$foreign_libs_dir\$vendor\$lib\"\)"
+                 (slurp (io/file out "src/test/cljs_build/foreign-libs-dir/vendor/lib.js"))))))
+
+(deftest cljs-1883-test-foreign-libs-use-relative-path
+  (test/delete-node-modules)
+  (let [out "cljs-2334-out"
+        root (io/file "src" "test" "cljs_build")
+        opts {:foreign-libs
+              [{:file (str (io/file root "foreign_libs_cljs_2334" "lib.js"))
+                :module-type :es6
+                :provides  ["mylib"]}]
+              :npm-deps {:left-pad "1.1.3"}
+              :install-deps true
+              :output-dir (str out)}]
+    (test/delete-out-files out)
+    (build/build (build/inputs (io/file root "foreign_libs_cljs_2334")) opts)
+    (let [foreign-lib-file (io/file out (-> opts :foreign-libs first :file))
+          index-js (slurp (io/file "cljs-2334-out" "node_modules" "left-pad" "index.js"))]
+      (is (.exists foreign-lib-file))
+      (is (re-find #"module\$.*\$node_modules\$left_pad\$index=" index-js))
+      (is (not (re-find #"module\.exports" index-js)))
+      ;; assert Closure finds and processes the left-pad dep in node_modules
+      ;; if it can't be found the require will be issued to module$left_pad
+      ;; so we assert it's of the form module$path$to$node_modules$left_pad$index
+      (is (re-find #"module\$.*\$node_modules\$left_pad\$index\[\"default\"\]\(42,5,0\)" (slurp foreign-lib-file))))
+    (test/delete-out-files out)
+    (test/delete-node-modules)))
+
+(deftest cljs-2519-test-cljs-base-entries
+  (let [dir (io/file "src" "test" "cljs_build" "code-split")
+        out (io/file (test/tmp-dir) "cljs-base-entries")
+        opts {:output-dir (str out)
+              :asset-path "/out"
+              :optimizations :none
+              :modules {:a {:entries '#{code.split.a}
+                            :output-to (io/file out "a.js")}
+                        :b {:entries '#{code.split.b}
+                            :output-to (io/file out "b.js")}
+                        :c {:entries '#{code.split.c}
+                            :output-to (io/file out "c.js")}}}]
+    (test/delete-out-files out)
+    (build/build (build/inputs dir) opts)
+    (testing "Module :cljs-base"
+      (let [content (slurp (io/file out "cljs_base.js"))]
+        (testing "requires code.split.d (used in :b and :c)"
+          (is (test/document-write? content 'code.split.d)))))
+    (testing "Module :a"
+      (let [content (slurp (-> opts :modules :a :output-to))]
+        (testing "requires code.split.a"
+          (is (test/document-write? content 'code.split.a)))
+        (testing "requires cljs.pprint (only used in :a)"
+          (is (test/document-write? content 'cljs.pprint)))))
+    (testing "Module :b"
+      (let [content (slurp (-> opts :modules :b :output-to))]
+        (testing "requires code.split.b"
+          (is (test/document-write? content 'code.split.b)))))
+    (testing "Module :c"
+      (let [content (slurp (-> opts :modules :c :output-to))]
+        (testing "requires code.split.c"
+          (is (test/document-write? content 'code.split.c)))))))
+
+(deftest test-cljs-2592
+  (test/delete-node-modules)
+  (spit (io/file "package.json") "{}")
+  (let [cenv (env/default-compiler-env)
+        dir (io/file "src" "test" "cljs_build" "package_json_resolution_test")
+        out (io/file (test/tmp-dir) "package_json_resolution_test")
+        opts {:main 'package-json-resolution-test.core
+              :output-dir (str out)
+              :output-to (str (io/file out "main.js"))
+              :optimizations :none
+              :install-deps true
+              :npm-deps {:iterall "1.2.2"
+                         :graphql "0.13.1"}
+              :package-json-resolution :nodejs
+              :closure-warnings {:check-types :off
+                                 :non-standard-jsdoc :off}}]
+    (test/delete-out-files out)
+    (build/build (build/inputs dir) opts cenv)
+    (testing "processes the iterall index.js"
+      (let [index-js (io/file out "node_modules/iterall/index.js")]
+        (is (.exists index-js))
+        (is (contains? (:js-module-index @cenv) "iterall"))
+        (is (re-find #"goog\.provide\(\"module\$.*\$node_modules\$iterall\$index\"\)" (slurp index-js)))))
+    (testing "processes the graphql index.js"
+      (let [index-js (io/file out "node_modules/graphql/index.js")
+            execution-index-js (io/file out "node_modules/graphql/execution/index.js")
+            ast-from-value-js (io/file out "node_modules/grapqhl/utilities/astFromValue.js")]
+        (is (.exists index-js))
+        (is (contains? (:js-module-index @cenv) "graphql"))
+        (is (re-find  #"goog\.provide\(\"module\$.*\$node_modules\$graphql\$index\"\)" (slurp index-js)))))
+    (testing "processes a nested index.js in graphql"
+      (let [nested-index-js (io/file out "node_modules/graphql/execution/index.js")]
+        (is (.exists nested-index-js))
+        (is (contains? (:js-module-index @cenv) "graphql/execution"))
+        (is (re-find  #"goog\.provide\(\"module\$.*\$node_modules\$graphql\$execution\$index\"\)" (slurp nested-index-js)))))
+    (testing "processes cross-package imports"
+      (let [ast-from-value-js (io/file out "node_modules/graphql/utilities/astFromValue.js")]
+        (is (.exists ast-from-value-js))
+        (is (re-find #"goog.require\(\"module\$.*\$node_modules\$iterall\$index\"\);" (slurp ast-from-value-js)))))
+    (testing "adds dependencies to cljs_deps.js"
+      (let [deps-js (io/file out "cljs_deps.js")]
+        (is (re-find #"goog\.addDependency\(\"..\/node_modules\/iterall\/index.js\"" (slurp deps-js)))
+        (is (re-find #"goog\.addDependency\(\"..\/node_modules\/graphql\/index.js\"" (slurp deps-js)))
+        (is (re-find #"goog\.addDependency\(\"..\/node_modules\/graphql\/execution/index.js\"" (slurp deps-js)))))
+    (testing "adds the right module names to the core.cljs build output"
+      (let [core-js (io/file out "package_json_resolution_test/core.js")]
+        (is (re-find #"goog\.require\('module\$.*\$node_modules\$iterall\$index'\);" (slurp core-js)))
+        (is (re-find #"module\$.+\$node_modules\$iterall\$index\[\"default\"\]\.isCollection" (slurp core-js)))
+        (is (re-find #"goog\.require\('module\$.*\$node_modules\$graphql\$index'\);" (slurp core-js)))
+        (is (re-find  #"module\$.+\$node_modules\$graphql\$index\[\"default\"\]" (slurp core-js))))))
+  (.delete (io/file "package.json"))
+  (test/delete-node-modules))

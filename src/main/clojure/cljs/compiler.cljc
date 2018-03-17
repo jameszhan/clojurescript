@@ -24,6 +24,7 @@
                     [cljs.js-deps :as deps])
      :cljs (:require [goog.string :as gstring]
                      [clojure.string :as string]
+                     [clojure.set :as set]
                      [cljs.tools.reader :as reader]
                      [cljs.env :as env]
                      [cljs.analyzer :as ana]
@@ -35,6 +36,15 @@
 #?(:clj (set! *warn-on-reflection* true))
 
 (def js-reserved ana/js-reserved)
+
+(def ^:private es5>=
+  (into #{}
+    (comp
+      (mapcat (fn [lang]
+                [lang (keyword (string/replace (name lang) #"^ecmascript" "es"))])))
+    [:ecmascript5 :ecmascript5-strict :ecmascript6 :ecmascript6-strict
+     :ecmascript-2015 :ecmascript6-typed :ecmascript-2016 :ecmascript-2017
+     :ecmascript-next]))
 
 (def ^:dynamic *recompiled* nil)
 (def ^:dynamic *inputs* nil)
@@ -238,9 +248,24 @@
    (defmethod emit-constant Integer [x] (emits x))) ; reader puts Integers in metadata
 
 #?(:clj
-   (defmethod emit-constant Double [x] (emits x))
+   (defmethod emit-constant Double [x]
+     (let [x (double x)]
+       (cond (Double/isNaN x)
+             (emits "NaN")
+
+             (Double/isInfinite x)
+             (emits (if (pos? x) "Infinity" "-Infinity"))
+
+             :else (emits x))))
    :cljs
-   (defmethod emit-constant js/Number [x] (emits "(" x ")")))
+   (defmethod emit-constant js/Number [x]
+     (cond (js/isNaN x)
+           (emits "NaN")
+
+           (not (js/isFinite x))
+           (emits (if (pos? x) "Infinity" "-Infinity"))
+
+           :else (emits "(" x ")"))))
 
 #?(:clj
    (defmethod emit-constant BigDecimal [x] (emits (.doubleValue ^BigDecimal x))))
@@ -333,23 +358,45 @@
   [{:keys [info env form] :as ast}]
   (if-let [const-expr (:const-expr ast)]
     (emit (assoc const-expr :env env))
-    (let [var-name (:name info)
+    (let [{:keys [options] :as cenv} @env/*compiler*
+          var-name (:name info)
           info (if (= (namespace var-name) "js")
-                 (let [js-module-name (get-in @env/*compiler* [:js-module-index (name var-name)])]
+                 (let [js-module-name (get-in cenv [:js-module-index (name var-name) :name])]
                    (or js-module-name (name var-name)))
                  info)]
-      ; We need a way to write bindings out to source maps and javascript
-      ; without getting wrapped in an emit-wrap calls, otherwise we get
-      ; e.g. (function greet(return x, return y) {}).
+      ;; We need a way to write bindings out to source maps and javascript
+      ;; without getting wrapped in an emit-wrap calls, otherwise we get
+      ;; e.g. (function greet(return x, return y) {}).
       (if (:binding-form? ast)
-        ; Emit the arg map so shadowing is properly handled when munging
-        ; (prevents duplicate fn-param-names)
+        ;; Emit the arg map so shadowing is properly handled when munging
+        ;; (prevents duplicate fn-param-names)
         (emits (munge ast))
         (when-not (= :statement (:context env))
-          (emit-wrap env
-            (emits
-              (cond-> info
-                (not= form 'js/-Infinity) munge))))))))
+          (let [reserved (cond-> js-reserved
+                           (and (es5>= (:language-out options))
+                                ;; we can skip munging things like `my.ns.default`
+                                ;; but not standalone `default` variable names
+                                ;; as they're not valid ES5 - Antonio
+                                (some? (namespace var-name)))
+                           (set/difference ana/es5-allowed))
+                js-module (get-in cenv [:js-namespaces (or (namespace var-name) (name var-name))])
+                info (cond-> info
+                       (not= form 'js/-Infinity) (munge reserved))]
+            (emit-wrap env
+              (case (:module-type js-module)
+                ;; Closure exports CJS exports through default property
+                :commonjs
+                (if (namespace var-name)
+                  (emits (munge (namespace var-name) reserved) "[\"default\"]." (munge (name var-name) reserved))
+                  (emits (munge (name var-name) reserved) "[\"default\"]"))
+
+                ;; Emit bracket notation for default prop access instead of dot notation
+                :es6
+                (if (and (namespace var-name) (= "default" (name var-name)))
+                  (emits (munge (namespace var-name) reserved) "[\"default\"]")
+                  (emits info))
+
+                (emits info)))))))))
 
 (defmethod emit* :var-special
   [{:keys [env var sym meta] :as arg}]
@@ -441,6 +488,11 @@
               (emits ", \"" (name k) "\": " v))))
         (emits "})"))
       (emits "[" (comma-sep items) "]"))))
+
+(defmethod emit* :record-value
+  [{:keys [items ns name items env]}]
+  (emit-wrap env
+    (emits ns ".map__GT_" name "(" items ")")))
 
 (defmethod emit* :constant
   [{:keys [form env]}]
@@ -1031,7 +1083,7 @@
 
        keyword?
        (emits f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) ")")
-       
+
        variadic-invoke
        (let [mfa (:max-fixed-arity variadic-invoke)]
         (emits f "(" (comma-sep (take mfa args))
@@ -1075,23 +1127,30 @@
                                      (let [{node-libs true libs-to-load false} (group-by ana/node-module-dep? libs)]
                                        [node-libs libs-to-load])
                                      [nil libs]))
-        {global-exports-libs true libs-to-load false} (group-by ana/dep-has-global-exports? libs-to-load)]
+        global-exports-libs (filter ana/dep-has-global-exports? libs-to-load)]
     (when (-> libs meta :reload-all)
-      (emitln "if(!COMPILED) " loaded-libs-temp " = " loaded-libs " || cljs.core.set();")
-      (emitln "if(!COMPILED) " loaded-libs " = cljs.core.set();"))
+      (emitln "if(!COMPILED) " loaded-libs-temp " = " loaded-libs " || cljs.core.set([\"cljs.core\"]);")
+      (emitln "if(!COMPILED) " loaded-libs " = cljs.core.set([\"cljs.core\"]);"))
     (doseq [lib libs-to-load]
       (cond
         #?@(:clj
             [(ana/foreign-dep? lib)
              ;; we only load foreign libraries under optimizations :none
-             (when (= :none optimizations)
+             ;; under :modules we also elide loads, as the module loader will
+             ;; have handled it - David
+             (when (and (= :none optimizations)
+                        (not (contains? options :modules)))
                (if (= :nodejs target)
                  ;; under node.js we load foreign libs globally
                  (let [ijs (get js-dependency-index (name lib))]
-                   (emitln "cljs.core.load_file(\""
-                     (str (io/file (util/output-directory options) (or (deps/-relative-path ijs)
-                                                                     (util/relative-name (:url ijs)))))
-                     "\");"))
+                   (emitln "cljs.core.load_file("
+                     (-> (io/file (util/output-directory options)
+                                  (or (deps/-relative-path ijs)
+                                      (util/relative-name (:url ijs))))
+                         str
+                         escape-string
+                         wrap-in-double-quotes)
+                     ");"))
                  (emitln "goog.require('" (munge lib) "');")))]
             :cljs
             [(and (ana/foreign-dep? lib)
@@ -1229,11 +1288,6 @@
    (defn url-path [^File f]
      (.getPath (.toURL (.toURI f)))))
 
-(defn- build-affecting-options [opts]
-  (select-keys opts
-    [:static-fns :fn-invoke-direct :optimize-constants :elide-asserts :target
-     :cache-key :checked-arrays]))
-
 #?(:clj
    (defn compiled-by-string
      ([]
@@ -1244,7 +1298,7 @@
       (str "// Compiled by ClojureScript "
         (util/clojurescript-version)
         (when opts
-          (str " " (pr-str (build-affecting-options opts))))))))
+          (str " " (pr-str (ana/build-affecting-options opts))))))))
 
 #?(:clj
    (defn cached-core [ns ext opts]
@@ -1307,14 +1361,6 @@
             :relpaths {(util/path src)
                        (util/ns->relpath (first (:provides opts)) (:ext opts))}})))))
 
-(defn module-for-entry [entry modules]
-  (->> modules
-    (filter
-      (fn [[module-name {:keys [entries]}]]
-        (some #{(-> entry munge str)}
-          (map #(-> % munge str) entries))))
-    ffirst))
-
 #?(:clj
    (defn emit-source [src dest ext opts]
      (with-open [out ^java.io.Writer (io/make-writer dest {})]
@@ -1366,38 +1412,33 @@
                                 :name ns-name}))
                        (emit ast)
                        (recur (rest forms) ns-name deps))))
-                 (do
-                   (when-let [module (and (contains? (set (vals deps)) 'cljs.loader)
-                                          (module-for-entry ns-name (:modules opts)))]
-                     (emit
-                       (ana/analyze env `(cljs.loader/set-loaded! ~module)
-                         nil opts)))
-                   (let [sm-data (when *source-map-data* @*source-map-data*)
-                         ret (merge
-                               {:ns         (or ns-name 'cljs.user)
-                                :macros-ns  (:macros-ns opts)
-                                :provides   [ns-name]
-                                :requires   (if (= ns-name 'cljs.core)
-                                              (set (vals deps))
-                                              (cond-> (conj (set (vals deps)) 'cljs.core)
-                                                (get-in @env/*compiler* [:options :emit-constants])
-                                                (conj ana/constants-ns-sym)))
-                                :file        dest
-                                :out-file    dest
-                                :source-file src}
-                               (when sm-data
-                                 {:source-map (:source-map sm-data)}))]
-                     (when (and sm-data (= :none (:optimizations opts)))
-                       (emit-source-map src dest sm-data
-                         (merge opts {:ext ext :provides [ns-name]})))
-                     (let [path (.getPath (.toURL ^File dest))]
-                       (swap! env/*compiler* assoc-in [::compiled-cljs path] ret))
-                     (let [{:keys [output-dir cache-analysis]} opts]
-                       (when (and (true? cache-analysis) output-dir)
-                         (ana/write-analysis-cache ns-name
-                           (ana/cache-file src (ana/parse-ns src) output-dir :write)
-                           src))
-                       ret)))))))))))
+                 (let [sm-data (when *source-map-data* @*source-map-data*)
+                       ret (merge
+                             {:ns         (or ns-name 'cljs.user)
+                              :macros-ns  (:macros-ns opts)
+                              :provides   [ns-name]
+                              :requires   (if (= ns-name 'cljs.core)
+                                            (set (vals deps))
+                                            (cond-> (conj (set (vals deps)) 'cljs.core)
+                                              (get-in @env/*compiler* [:options :emit-constants])
+                                              (conj ana/constants-ns-sym)))
+                              :file        dest
+                              :out-file    dest
+                              :source-file src}
+                             (when sm-data
+                               {:source-map (:source-map sm-data)}))]
+                   (when (and sm-data (= :none (:optimizations opts)))
+                     (emit-source-map src dest sm-data
+                       (merge opts {:ext ext :provides [ns-name]})))
+                   (let [path (.getPath (.toURL ^File dest))]
+                     (swap! env/*compiler* assoc-in [::compiled-cljs path] ret))
+                   (ana/ensure-defs ns-name)
+                   (let [{:keys [output-dir cache-analysis]} opts]
+                     (when (and (true? cache-analysis) output-dir)
+                       (ana/write-analysis-cache ns-name
+                         (ana/cache-file src (ana/parse-ns src) output-dir :write)
+                         src))
+                     ret))))))))))
 
 #?(:clj
    (defn compile-file*
@@ -1411,10 +1452,10 @@
           (fn []
             (when (and (or ana/*verbose* (:verbose opts))
                        (not (:compiler-stats opts)))
-              (util/debug-prn "Compiling" (str src)))
+              (util/debug-prn "Compiling" (str src) "to" (str dest)))
             (util/measure (and (or ana/*verbose* (:verbose opts))
                                (:compiler-stats opts))
-              (str "Compiling " src)
+              (str "Compiling " (str src) " to " (str dest))
               (let [ext (util/ext src)
                    {:keys [ns] :as ns-info} (ana/parse-ns src)]
                (if-let [cached (cached-core ns ext opts)]
@@ -1445,8 +1486,8 @@
                  (and version (not= version version')))
                (and opts
                     (not (and (io/resource "cljs/core.aot.js") (= 'cljs.core ns)))
-                    (not= (build-affecting-options opts)
-                          (build-affecting-options (util/build-options dest))))
+                    (not= (ana/build-affecting-options opts)
+                          (ana/build-affecting-options (util/build-options dest))))
                (and opts (:source-map opts)
                  (if (= (:optimizations opts) :none)
                    (not (.exists (io/file (str (.getPath dest) ".map"))))

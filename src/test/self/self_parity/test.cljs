@@ -16,6 +16,7 @@
   ClojureScript compiler, and also running the resulting tests."}
   self-parity.test
   (:require [clojure.string :as string]
+            [cljs.compiler :as comp]
             [cljs.nodejs :as nodejs]
             [cljs.js :as cljs]
             [cljs.tools.reader :as reader]
@@ -221,6 +222,8 @@
 
 ;; Facilities for driving cljs.js
 
+(def st (cljs/empty-state))
+
 (def load-fn (make-load-fn src-paths node-read-file))
 
 (defn eval-form
@@ -237,7 +240,7 @@
      :verbose    false}
     cb))
 
-;; Test suite runner
+;; Error handler
 
 (defn- handle-error
   [error sms]
@@ -255,94 +258,99 @@
         (print "caused by: ")
         (recur cause)))))
 
+;; Test suite runner
+
 (defn run-tests
   "Runs the tests."
   []
   ;; Ideally we'd just load test_runner.cljs, but a few namespace tests
   ;; don't yet run in bootstrapped ClojureScript. These are commented
   ;; out below and can be uncommented as fixed.
-  (let [st (cljs/empty-state)]
-    (eval-form st 'cljs.user
-      '(ns parity.core
-         (:require [cljs.test :refer-macros [run-tests]]
-                   [cljs.primitives-test]
-                   [cljs.destructuring-test]
-                   [cljs.new-new-test]
-                   [cljs.printing-test]
-                   [cljs.seqs-test]
-                   [cljs.collections-test]
-                   [cljs.hashing-test]
-                   [cljs.core-test :as core-test]
-                   [cljs.reader-test]
-                   [cljs.binding-test]
-                   #_[cljs.ns-test]
-                   [clojure.string-test]
-                   [clojure.data-test]
-                   [clojure.walk-test]
-                   [cljs.macro-test]
-                   [cljs.letfn-test]
-                   [foo.ns-shadow-test]
-                   [cljs.top-level]
-                   [cljs.reducers-test]
-                   [cljs.keyword-test]
-                   [cljs.import-test]
-                   [cljs.ns-test.foo]
-                   [cljs.pprint]
-                   [cljs.pprint-test]
-                   [cljs.spec-test]
-                   #_[cljs.spec.test-test]
-                   [cljs.clojure-alias-test]
-                   [cljs.hash-map-test]
-                   [cljs.map-entry-test]
-                   [cljs.syntax-quote-test]
-                   [cljs.predicates-test]
-                   [cljs.test-test]
-                   [static.core-test]
-                   [cljs.recur-test]
-                   [cljs.array-access-test]))
-      (fn [{:keys [value error]}]
-        (if error
-          (handle-error error (:source-maps @st))
-          (eval-form st 'parity.core
-            '(run-tests
-               'cljs.primitives-test
-               'cljs.destructuring-test
-               'cljs.new-new-test
-               'cljs.printing-test
-               'cljs.seqs-test
-               'cljs.collections-test
-               'cljs.hashing-test
-               'cljs.core-test
-               'cljs.reader-test
-               'clojure.string-test
-               'clojure.data-test
-               'clojure.walk-test
-               'cljs.letfn-test
-               'cljs.reducers-test
-               'cljs.binding-test
-               'cljs.macro-test
-               'cljs.top-level
-               'cljs.keyword-test
-               #_'cljs.ns-test
-               'cljs.ns-test.foo
-               'foo.ns-shadow-test
-               'cljs.import-test
-               'cljs.pprint
-               'cljs.pprint-test
-               'cljs.spec-test
-               #_'cljs.spec.test-test
-               'cljs.clojure-alias-test
-               'cljs.hash-map-test
-               'cljs.map-entry-test
-               'cljs.syntax-quote-test
-               'cljs.predicates-test
-               'cljs.test-test
-               'static.core-test
-               'cljs.recur-test
-               'cljs.array-access-test)
-            (fn [{:keys [value error]}]
-              (when error
-                (handle-error error (:source-maps @st))))))))))
+  (eval-form st 'cljs.user
+    '(ns parity.core
+       (:require [cljs.test :refer-macros [run-tests]]
+                 [cljs.eval-test]
+                 [cljs.primitives-test]
+                 [cljs.destructuring-test]
+                 [cljs.new-new-test]
+                 [cljs.printing-test]
+                 [cljs.seqs-test]
+                 [cljs.collections-test]
+                 [cljs.hashing-test]
+                 [cljs.core-test :as core-test]
+                 [cljs.reader-test]
+                 [cljs.binding-test]
+                 #_[cljs.ns-test]
+                 [clojure.string-test]
+                 [clojure.data-test]
+                 [clojure.walk-test]
+                 [cljs.macro-test]
+                 [cljs.letfn-test]
+                 [foo.ns-shadow-test]
+                 [cljs.top-level]
+                 [cljs.reducers-test]
+                 [cljs.keyword-test]
+                 [cljs.import-test]
+                 [cljs.ns-test.foo]
+                 [cljs.pprint]
+                 [cljs.pprint-test]
+                 [cljs.spec-test]
+                 [cljs.spec.test-test]
+                 [cljs.clojure-alias-test]
+                 [cljs.hash-map-test]
+                 [cljs.map-entry-test]
+                 [cljs.syntax-quote-test]
+                 [cljs.predicates-test]
+                 [cljs.test-test]
+                 [static.core-test]
+                 [cljs.recur-test]
+                 [cljs.array-access-test]
+                 [cljs.extend-to-object-test]))
+    (fn [{:keys [value error]}]
+      (if error
+        (handle-error error (:source-maps @st))
+        (eval-form st 'parity.core
+          '(run-tests
+             'cljs.eval-test
+             'cljs.primitives-test
+             'cljs.destructuring-test
+             'cljs.new-new-test
+             'cljs.printing-test
+             'cljs.seqs-test
+             'cljs.collections-test
+             'cljs.hashing-test
+             'cljs.core-test
+             'cljs.reader-test
+             'clojure.string-test
+             'clojure.data-test
+             'clojure.walk-test
+             'cljs.letfn-test
+             'cljs.reducers-test
+             'cljs.binding-test
+             'cljs.macro-test
+             'cljs.top-level
+             'cljs.keyword-test
+             #_'cljs.ns-test
+             'cljs.ns-test.foo
+             'foo.ns-shadow-test
+             'cljs.import-test
+             'cljs.pprint
+             'cljs.pprint-test
+             'cljs.spec-test
+             'cljs.spec.test-test
+             'cljs.clojure-alias-test
+             'cljs.hash-map-test
+             'cljs.map-entry-test
+             'cljs.syntax-quote-test
+             'cljs.predicates-test
+             'cljs.test-test
+             'static.core-test
+             'cljs.recur-test
+             'cljs.array-access-test
+             'cljs.extend-to-object-test)
+          (fn [{:keys [value error]}]
+            (when error
+              (handle-error error (:source-maps @st)))))))))
 
 (defn -main [& args]
   (init-runtime)

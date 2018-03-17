@@ -6,18 +6,22 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :jvm-opts ^:replace ["-Dclojure.compiler.direct-linking=true" "-Xmx512m" "-server"]
   :source-paths ["src/main/clojure" "src/main/cljs"]
-  :resource-paths ["src/main/cljs"]
+  :resource-paths ["src/main/cljs" "resources"]
   :test-paths ["src/test/clojure" "src/test/cljs" "src/test/self" "src/test/cljs_cp"]
-  :dependencies [[org.clojure/clojure "1.8.0"]
+  :dependencies [[org.clojure/clojure "1.10.0-alpha4"]
+                 [org.clojure/spec.alpha "0.1.143"]
+                 [org.clojure/core.specs.alpha "0.1.24"]
                  [org.clojure/data.json "0.2.6"]
-                 [org.clojure/tools.reader "1.0.3"]
+                 [org.clojure/tools.reader "1.3.0-alpha3"]
                  [org.clojure/test.check "0.10.0-alpha2" :scope "test"]
                  [com.cognitect/transit-clj "0.8.300"]
-                 [org.clojure/google-closure-library "0.0-20170519-fa0499ef"]
-                 [com.google.javascript/closure-compiler-unshaded "v20170626"]
+                 [org.clojure/google-closure-library "0.0-20170809-b9c14c6b"]
+                 [com.google.javascript/closure-compiler-unshaded "v20180204"]
                  [org.mozilla/rhino "1.7R5"]]
   :profiles {:1.6 {:dependencies [[org.clojure/clojure "1.6.0"]]}
-             :uberjar {:aot :all :main clojure.main}}
+             :uberjar {:aot :all :main cljs.main}
+             :closure-snapshot {:dependencies [[com.google.javascript/closure-compiler-unshaded "1.0-SNAPSHOT"]]}}
   :aliases {"test-all" ["with-profile" "test,1.5:test,1.6" "test"]
             "check-all" ["with-profile" "1.5:1.6" "check"]}
-  :min-lein-version "2.0.0")
+  :min-lein-version "2.0.0"
+  :repositories {"sonatype-snapshot" {:url "https://oss.sonatype.org/content/repositories/snapshots"}})

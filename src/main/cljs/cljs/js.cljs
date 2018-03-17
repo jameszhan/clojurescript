@@ -7,7 +7,7 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns cljs.js
-  (:refer-clojure :exclude [require])
+  (:refer-clojure :exclude [require eval])
   (:require-macros [cljs.js :refer [dump-core]]
                    [cljs.env.macros :as env])
   (:require [clojure.string :as string]
@@ -155,27 +155,34 @@
   (str pre s))
 
 (defn- append-source-map
-  [state name source sb sm-data {:keys [output-dir asset-path] :as opts}]
+  [state name source sb sm-data {:keys [output-dir asset-path source-map-timestamp] :as opts}]
    (let [t    (.valueOf (js/Date.))
-         smn  (if name
-                (string/replace (munge (str name)) "." "/")
+         mn   (if name
+                (munge (str name))
                 (str "cljs-" t))
+         smn  (cond-> mn
+                name (string/replace "." "/"))
          ts   (.valueOf (js/Date.))
          out  (or output-dir asset-path)
-         src  (cond-> (str smn ".cljs?rel=" ts)
+         src  (cond-> (str smn ".cljs")
+                (true? source-map-timestamp) (str "?rel=" ts)
                 out (prefix (str out "/")))
-         file (cond-> (str smn ".js?rel=" ts)
+         file (cond-> (str smn ".js")
+                (true? source-map-timestamp) (str "?rel=" ts)
                 out (prefix (str out "/")))
          json (sm/encode {src (:source-map sm-data)}
                 {:lines (+ (:gen-line sm-data) 3)
                  :file  file :sources-content [source]})]
      (when (:verbose opts) (debug-prn json))
      (swap! state assoc-in
-       [:source-maps name] (sm/invert-reverse-map (:source-map sm-data)))
+       [:source-maps (symbol mn)] (sm/invert-reverse-map (:source-map sm-data)))
      (.append sb
        (str "\n//# sourceURL=" file
             "\n//# sourceMappingURL=data:application/json;base64,"
-            (base64/encodeString (string/replace json #"%([0-9A-F]{2})" (.fromCharCode js/String "0x$1")))))))
+            (-> (js/encodeURIComponent json)
+                (string/replace #"%([0-9A-F]{2})" (fn [[_ match]]
+                                                    (.fromCharCode js/String (str "0x" match))))
+                (base64/encodeString))))))
 
 (defn- current-alias-map
   []
@@ -224,7 +231,9 @@
   [bound-vars cache opts cb]
   (process-deps bound-vars
     (distinct (vals (:require-macros cache)))
-    (assoc opts :macros-ns true)
+    (-> opts
+      (assoc :macros-ns true)
+      (dissoc :emit-constants :optimize-constants))
     cb))
 
 (defn- process-libs-deps
@@ -288,7 +297,7 @@
                  "*load-fn* may only return a map or nil")
                (if resource
                  (let [{:keys [lang source cache source-map file]} resource]
-                   (condp = lang
+                   (condp keyword-identical? lang
                      :clj (do
                             (pre-file-side-effects (:*compiler* bound-vars) aname file opts)
                             (eval-str* bound-vars source name (assoc opts :cljs-file file)
@@ -340,8 +349,6 @@
                      (str "Could not require " name) cause))))))
        (cb {:value true})))))
 
-(declare ns-side-effects analyze-deps)
-
 (defn- patch-alias-map
   [compiler in from to]
   (let [patch (fn [k add-if-present?]
@@ -368,43 +375,56 @@
     (patch-renames :renames)
     (patch-renames :rename-macros)))
 
+(defn- self-require? [deps opts]
+  (and (true? (:def-emits-var opts)) (some #{ana/*cljs-ns*} deps)))
+
 (defn- load-deps
   ([bound-vars ana-env lib deps cb]
    (load-deps bound-vars ana-env lib deps nil nil cb))
   ([bound-vars ana-env lib deps reload opts cb]
    (when (:verbose opts)
      (debug-prn "Loading dependencies for" lib))
-   (binding [ana/*cljs-dep-set* (vary-meta (conj (:*cljs-dep-set* bound-vars) lib)
-                                  update-in [:dep-path] conj lib)]
-     (assert (every? #(not (contains? (:*cljs-dep-set* bound-vars) %)) deps)
-       (str "Circular dependency detected "
-         (-> (:*cljs-dep-set* bound-vars) meta :dep-path)))
-     (if (seq deps)
-       (let [dep (first deps)
-             opts' (-> opts
-                     (dissoc :context)
-                     (dissoc :ns))]
-         (require bound-vars dep reload opts'
-           (fn [res]
-             (when (:verbose opts)
-               (debug-prn "Loading result:" res))
-             (if-not (:error res)
-               (load-deps bound-vars ana-env lib (next deps) nil opts cb)
-               (if-let [cljs-dep (let [cljs-ns (ana/clj-ns->cljs-ns dep)]
-                                   (get {dep nil} cljs-ns cljs-ns))]
-                 (require bound-vars cljs-dep opts'
-                   (fn [res]
-                     (if (:error res)
-                       (cb res)
-                       (do
-                         (patch-alias-map (:*compiler* bound-vars) lib dep cljs-dep)
-                         (load-deps bound-vars ana-env lib (next deps) nil opts
-                           (fn [res]
-                             (if (:error res)
-                               (cb res)
-                               (cb (update res :aliased-loads assoc dep cljs-dep)))))))))
-                 (cb res))))))
-       (cb {:value nil})))))
+   (binding [ana/*cljs-dep-set* (let [lib (if (self-require? deps opts)
+                                            'cljs.user
+                                            lib)]
+                                  (vary-meta (conj (:*cljs-dep-set* bound-vars) lib)
+                                    update-in [:dep-path] conj lib))]
+     (let [bound-vars (assoc bound-vars :*cljs-dep-set* ana/*cljs-dep-set*)]
+       (if-not (every? #(not (contains? ana/*cljs-dep-set* %)) deps)
+         (cb (wrap-error
+               (ana/error ana-env
+                 (str "Circular dependency detected "
+                   (apply str
+                     (interpose " -> "
+                       (conj (-> ana/*cljs-dep-set* meta :dep-path)
+                         (some ana/*cljs-dep-set* deps))))))))
+         (if (seq deps)
+           (let [dep (first deps)
+                 opts' (-> opts
+                         (dissoc :context)
+                         (dissoc :def-emits-var)
+                         (dissoc :ns))]
+             (require bound-vars dep reload opts'
+               (fn [res]
+                 (when (:verbose opts)
+                   (debug-prn "Loading result:" res))
+                 (if-not (:error res)
+                   (load-deps bound-vars ana-env lib (next deps) nil opts cb)
+                   (if-let [cljs-dep (let [cljs-ns (ana/clj-ns->cljs-ns dep)]
+                                       (get {dep nil} cljs-ns cljs-ns))]
+                     (require bound-vars cljs-dep opts'
+                       (fn [res]
+                         (if (:error res)
+                           (cb res)
+                           (do
+                             (patch-alias-map (:*compiler* bound-vars) lib dep cljs-dep)
+                             (load-deps bound-vars ana-env lib (next deps) nil opts
+                               (fn [res]
+                                 (if (:error res)
+                                   (cb res)
+                                   (cb (update res :aliased-loads assoc dep cljs-dep)))))))))
+                     (cb res))))))
+           (cb {:value nil})))))))
 
 (declare analyze-str*)
 
@@ -412,43 +432,58 @@
   ([bound-vars ana-env lib deps cb]
    (analyze-deps bound-vars ana-env lib deps nil cb))
   ([bound-vars ana-env lib deps opts cb]
-   (let [compiler @(:*compiler* bound-vars)]
-     (binding [ana/*cljs-dep-set* (vary-meta (conj (:*cljs-dep-set* bound-vars) lib)
-                                    update-in [:dep-path] conj lib)]
-       (assert (every? #(not (contains? (:*cljs-dep-set* bound-vars) %)) deps)
-         (str "Circular dependency detected "
-           (-> (:*cljs-dep-set* bound-vars) meta :dep-path)))
-       (if (seq deps)
-         (let [dep (first deps)]
-           (try
-             ((:*load-fn* bound-vars) {:name dep :path (ns->relpath dep)}
-              (fn [resource]
-                (assert (or (map? resource) (nil? resource))
-                  "*load-fn* may only return a map or nil")
-                (if resource
-                  (let [{:keys [name lang source file]} resource]
-                    (condp = lang
-                      :clj (do
-                             (pre-file-side-effects (:*compiler* bound-vars) name file opts)
-                             (analyze-str* bound-vars source name (assoc opts :cljs-file file)
-                               (fn [res]
-                                 (post-file-side-effects file opts)
-                                 (if-not (:error res)
-                                   (analyze-deps bound-vars ana-env lib (next deps) opts cb)
-                                   (cb res)))))
-                      :js (analyze-deps bound-vars ana-env lib (next deps) opts cb)
-                      (wrap-error
-                        (ana/error ana-env
-                          (str "Invalid :lang specified " lang ", only :clj or :js allowed")))))
-                  (cb (wrap-error
-                        (ana/error ana-env
-                          (ana/error-message :undeclared-ns
-                            {:ns-sym dep :js-provide (name dep)})))))))
-             (catch :default cause
-               (cb (wrap-error
-                     (ana/error ana-env
-                       (str "Could not analyze dep " dep) cause))))))
-         (cb {:value nil}))))))
+   (binding [ana/*cljs-dep-set* (vary-meta (conj (:*cljs-dep-set* bound-vars) lib)
+                                  update-in [:dep-path] conj lib)]
+     (let [compiler @(:*compiler* bound-vars)
+           bound-vars (assoc bound-vars :*cljs-dep-set* ana/*cljs-dep-set*)]
+       (if-not (every? #(not (contains? ana/*cljs-dep-set* %)) deps)
+         (cb (wrap-error
+               (ana/error ana-env
+                 (str "Circular dependency detected "
+                   (apply str
+                     (interpose " -> "
+                       (conj (-> ana/*cljs-dep-set* meta :dep-path)
+                         (some ana/*cljs-dep-set* deps))))))))
+         (if (seq deps)
+           (let [dep (first deps)]
+             (try
+               ((:*load-fn* bound-vars) {:name dep :path (ns->relpath dep)}
+                (fn [resource]
+                  (assert (or (map? resource) (nil? resource))
+                    "*load-fn* may only return a map or nil")
+                  (if-not resource
+                    (if-let [cljs-dep (let [cljs-ns (ana/clj-ns->cljs-ns dep)]
+                                        (get {dep nil} cljs-ns cljs-ns))]
+                      (do
+                        (patch-alias-map (:*compiler* bound-vars) lib dep cljs-dep)
+                        (analyze-deps bound-vars ana-env lib (cons cljs-dep (next deps)) opts
+                          (fn [res]
+                            (if (:error res)
+                              (cb res)
+                              (cb (update res :aliased-loads assoc dep cljs-dep))))))
+                      (cb (wrap-error
+                            (ana/error ana-env
+                              (ana/error-message :undeclared-ns
+                                {:ns-sym dep :js-provide (name dep)})))))
+                    (let [{:keys [name lang source file]} resource]
+                      (condp keyword-identical? lang
+                        :clj (do
+                               (pre-file-side-effects (:*compiler* bound-vars) name file opts)
+                               (analyze-str* bound-vars source name (assoc opts :cljs-file file)
+                                 (fn [res]
+                                   (post-file-side-effects file opts)
+                                   (if-not (:error res)
+                                     (analyze-deps bound-vars ana-env lib (next deps) opts cb)
+                                     (cb res)))))
+                        :js (analyze-deps bound-vars ana-env lib (next deps) opts cb)
+                        (wrap-error
+                          (ana/error ana-env
+                            (str "Invalid :lang specified " lang ", only :clj or :js allowed"))))))))
+               (catch :default cause
+                 (cb (wrap-error
+                       (ana/error ana-env
+                         (str "Could not analyze dep " dep) cause))))))
+           (cb {:value nil})))))))
 
 (defn- load-macros [bound-vars k macros lib reload reloads opts cb]
   (if (seq macros)
@@ -460,7 +495,9 @@
           opts' (-> opts
                   (assoc :macros-ns true)
                   (dissoc :context)
-                  (dissoc :ns))]
+                  (dissoc :def-emits-var)
+                  (dissoc :ns)
+                  (dissoc :emit-constants :optimize-constants))]
       (require bound-vars nsym k opts'
         (fn [res]
           (if-not (:error res)
@@ -482,23 +519,33 @@
     (cb {:value nil})))
 
 (defn- rewrite-ns-ast
-  [ast smap]
-  (let [rewrite-renames (fn [m]
-                          (when m
-                            (reduce (fn [acc [renamed qualified-sym :as entry]]
-                                      (let [from (symbol (namespace qualified-sym))
-                                            to   (get smap from)]
-                                        (if (some? to)
-                                          (assoc acc renamed (symbol (str to) (name qualified-sym)))
-                                          (merge acc entry))))
-                              {} m)))]
-    (-> ast
-      (update :uses #(walk/postwalk-replace smap %))
-      (update :use-macros #(walk/postwalk-replace smap %))
-      (update :requires #(merge smap (walk/postwalk-replace smap %)))
-      (update :require-macros #(merge smap (walk/postwalk-replace smap %)))
-      (update :renames rewrite-renames)
-      (update :rename-macros rewrite-renames))))
+  ([ast smap]
+   (rewrite-ns-ast ast smap false))
+  ([ast smap macros?]
+   (let [[uk rk renk] (if macros?
+                        [:use-macros :require-macros :rename-macros]
+                        [:uses :requires :renames])
+         rewrite-renames (fn [m]
+                           (when m
+                             (reduce (fn [acc [renamed qualified-sym :as entry]]
+                                       (let [from (symbol (namespace qualified-sym))
+                                             to   (get smap from)]
+                                         (if (some? to)
+                                           (assoc acc renamed (symbol (str to) (name qualified-sym)))
+                                           (merge acc entry))))
+                               {} m)))
+         rewrite-deps (fn [deps]
+                        (into []
+                          (map (fn [dep]
+                                 (if-let [new-dep (get smap dep)]
+                                   new-dep
+                                   dep)))
+                          deps))]
+     (-> ast
+       (update uk #(walk/postwalk-replace smap %))
+       (update rk #(merge smap (walk/postwalk-replace smap %)))
+       (update renk rewrite-renames)
+       (update :deps rewrite-deps)))))
 
 (defn- check-macro-autoload-inferring-missing
   [{:keys [requires name] :as ast} cenv]
@@ -522,7 +569,7 @@
    (if (#{:ns :ns*} op)
      (letfn [(check-uses-and-load-macros [res rewritten-ast]
                (let [env (:*compiler* bound-vars)
-                     {:keys [uses require-macros use-macros reload reloads name]} rewritten-ast]
+                     {:keys [uses use-macros reload reloads name]} rewritten-ast]
                  (if (:error res)
                    (cb res)
                    (if (:*load-macros* bound-vars)
@@ -532,13 +579,13 @@
                          (fn [res]
                            (if (:error res)
                              (cb res)
-                             (let [{:keys [require-macros] :as rewritten-ast} (rewrite-ns-ast rewritten-ast (:aliased-loads res))]
+                             (let [{:keys [require-macros] :as rewritten-ast} (rewrite-ns-ast rewritten-ast (:aliased-loads res) true)]
                                (when (:verbose opts) (debug-prn "Processing :require-macros for" (:name ast)))
                                (load-macros bound-vars :require-macros require-macros name reload reloads opts
                                  (fn [res']
                                    (if (:error res')
                                      (cb res')
-                                     (let [{:keys [require-macros use-macros] :as rewritten-ast} (rewrite-ns-ast rewritten-ast (:aliased-loads res))
+                                     (let [{:keys [use-macros] :as rewritten-ast} (rewrite-ns-ast rewritten-ast (:aliased-loads res) true)
                                            res' (try
                                                   (when (seq use-macros)
                                                     (when (:verbose opts) (debug-prn "Checking :use-macros for" (:name ast)))
@@ -583,23 +630,25 @@
 
          (and (not load) (:*analyze-deps* bound-vars) (seq (:deps ast)))
          (analyze-deps bound-vars ana-env (:name ast) (:deps ast) (dissoc opts :macros-ns)
-           #(check-uses-and-load-macros % ast))
+           #(check-uses-and-load-macros % (rewrite-ns-ast ast (:aliased-loads %))))
 
          :else
          (check-uses-and-load-macros {:value nil} ast)))
      (cb {:value ast}))))
 
 (defn- node-side-effects
-  [bound-vars sb deps ns-name]
+  [bound-vars sb deps ns-name emit-nil-result?]
   (doseq [dep deps]
     (.append sb
       (with-out-str
         (comp/emitln (munge ns-name) "."
           (ana/munge-node-lib dep)
-          " = require('" dep "');")))))
+          " = require('" dep "');"))))
+  (when (and (seq deps) emit-nil-result?)
+    (.append sb "null;")))
 
 (defn- global-exports-side-effects
-  [bound-vars sb deps ns-name]
+  [bound-vars sb deps ns-name emit-nil-result?]
   (let [{:keys [js-dependency-index]} @(:*compiler* bound-vars)]
     (doseq [dep deps]
       (let [{:keys [global-exports]} (get js-dependency-index (name dep))]
@@ -607,16 +656,27 @@
           (with-out-str
             (comp/emitln (munge ns-name) "."
               (ana/munge-global-export dep)
-              " = goog.global." (get global-exports (symbol dep)) ";")))))))
+              " = goog.global." (get global-exports (symbol dep)) ";")))))
+    (when (and (seq deps) emit-nil-result?)
+      (.append sb "null;"))))
+
+(defn- trampoline-safe
+  "Returns a new function that calls f but discards any return value,
+  returning nil instead, thus avoiding any inadvertent trampoline continuation
+  if a function happens to be returned."
+  [f]
+  (comp (constantly nil) f))
 
 (defn- analyze-str* [bound-vars source name opts cb]
   (let [rdr        (rt/indexing-push-back-reader source 1 name)
+        cb         (trampoline-safe cb)
         eof        (js-obj)
         aenv       (ana/empty-env)
         the-ns     (or (:ns opts) 'cljs.user)
         bound-vars (cond-> (merge bound-vars {:*cljs-ns* the-ns})
                      (:source-map opts) (assoc :*sm-data* (sm-data)))]
-    ((fn analyze-loop [last-ast ns]
+    (trampoline
+     (fn analyze-loop [last-ast ns]
        (binding [env/*compiler*         (:*compiler* bound-vars)
                  ana/*cljs-ns*          ns
                  ana/*checked-arrays*   (:checked-arrays opts)
@@ -652,12 +712,12 @@
                      (cb res)
                      (let [ast (:value res)]
                        (if (#{:ns :ns*} (:op ast))
-                         (ns-side-effects bound-vars aenv ast opts
+                         ((trampoline-safe ns-side-effects) bound-vars aenv ast opts
                            (fn [res]
                              (if (:error res)
                                (cb res)
-                               (analyze-loop ast (:name ast)))))
-                         (recur ast ns)))))
+                               (trampoline analyze-loop ast (:name ast)))))
+                         #(analyze-loop ast ns)))))
                  (cb {:value last-ast}))))))) nil the-ns)))
 
 (defn analyze-str
@@ -717,6 +777,7 @@
       :*data-readers* tags/*cljs-data-readers*
       :*passes*       (or (:passes opts) ana/*passes*)
       :*analyze-deps* (:analyze-deps opts true)
+      :*cljs-dep-set* ana/*cljs-dep-set*
       :*load-macros*  (:load-macros opts true)
       :*load-fn*      (or (:load opts) *load-fn*)
       :*eval-fn*      (or (:eval opts) *eval-fn*)}
@@ -725,10 +786,13 @@
 ;; -----------------------------------------------------------------------------
 ;; Eval
 
+(declare clear-fns!)
+
 (defn- eval* [bound-vars form opts cb]
   (let [the-ns     (or (:ns opts) 'cljs.user)
         bound-vars (cond-> (merge bound-vars {:*cljs-ns* the-ns})
                      (:source-map opts) (assoc :*sm-data* (sm-data)))]
+    (clear-fns!)
     (binding [env/*compiler*         (:*compiler* bound-vars)
               *eval-fn*              (:*eval-fn* bound-vars)
               ana/*cljs-ns*          (:*cljs-ns* bound-vars)
@@ -767,10 +831,11 @@
                       (.append sb
                         (with-out-str (comp/emitln (str "goog.provide(\"" (comp/munge ns-name) "\");"))))
                       (when-not (nil? node-deps)
-                        (node-side-effects bound-vars sb node-deps ns-name))
+                        (node-side-effects bound-vars sb node-deps ns-name (:def-emits-var opts)))
                       (global-exports-side-effects bound-vars sb
                         (filter ana/dep-has-global-exports? (:deps ast))
-                        ns-name)
+                        ns-name
+                        (:def-emits-var opts))
                       (cb {:value (*eval-fn* {:source (.toString sb)})})))))
               (let [src (with-out-str (comp/emit ast))]
                 (cb {:value (*eval-fn* {:source src})})))))))))
@@ -823,6 +888,7 @@
      {:*compiler*     state
       :*data-readers* tags/*cljs-data-readers*
       :*analyze-deps* (:analyze-deps opts true)
+      :*cljs-dep-set* ana/*cljs-dep-set*
       :*load-macros*  (:load-macros opts true)
       :*load-fn*      (or (:load opts) *load-fn*)
       :*eval-fn*      (or (:eval opts) *eval-fn*)}
@@ -833,13 +899,15 @@
 
 (defn- compile-str* [bound-vars source name opts cb]
   (let [rdr        (rt/indexing-push-back-reader source 1 name)
+        cb         (trampoline-safe cb)
         eof        (js-obj)
         aenv       (ana/empty-env)
         sb         (StringBuffer.)
         the-ns     (or (:ns opts) 'cljs.user)
         bound-vars (cond-> (merge bound-vars {:*cljs-ns* the-ns})
                      (:source-map opts) (assoc :*sm-data* (sm-data)))]
-    ((fn compile-loop [ns]
+    (trampoline
+     (fn compile-loop [ns]
        (binding [env/*compiler*         (:*compiler* bound-vars)
                  *eval-fn*              (:*eval-fn* bound-vars)
                  ana/*cljs-ns*          ns
@@ -877,20 +945,19 @@
                                              (let [{node-libs true libs-to-load false} (group-by ana/node-module-dep? (:deps ast))]
                                                [node-libs (assoc ast :deps libs-to-load)])
                                              [nil ast])]
-                       (.append sb (with-out-str (comp/emit ast)))
                        (if (#{:ns :ns*} (:op ast))
-                         (ns-side-effects bound-vars aenv ast opts
+                         ((trampoline-safe ns-side-effects) bound-vars aenv ast opts
                            (fn [res]
                              (if (:error res)
                                (cb res)
                                (let [ns-name (:name ast)]
+                                 (.append sb (with-out-str (comp/emit (:value res))))
                                  (when-not (nil? node-deps)
-                                   (node-side-effects bound-vars sb node-deps ns-name))
-                                 (global-exports-side-effects bound-vars sb
-                                   (filter ana/dep-has-global-exports? (:deps ast))
-                                   ns-name)
-                                 (compile-loop (:name ast))))))
-                         (recur ns)))))
+                                   (node-side-effects bound-vars sb node-deps ns-name (:def-emits-var opts)))
+                                 (trampoline compile-loop (:name ast))))))
+                         (do
+                           (.append sb (with-out-str (comp/emit ast)))
+                           #(compile-loop ns))))))
                  (do
                    (when (:source-map opts)
                      (append-source-map env/*compiler*
@@ -907,7 +974,7 @@
      the ClojureScript source
 
    name (symbol or string)
-     optional, the name of the source
+     optional, the name of the source - used as key in :source-maps
 
    opts (map)
      compilation options.
@@ -951,6 +1018,7 @@
    (compile-str*
      {:*compiler*     state
       :*data-readers* tags/*cljs-data-readers*
+      :*cljs-dep-set* ana/*cljs-dep-set*
       :*analyze-deps* (:analyze-deps opts true)
       :*load-macros*  (:load-macros opts true)
       :*load-fn*      (or (:load opts) *load-fn*)
@@ -963,6 +1031,7 @@
 
 (defn- eval-str* [bound-vars source name opts cb]
   (let [rdr        (rt/indexing-push-back-reader source 1 name)
+        cb         (trampoline-safe cb)
         eof        (js-obj)
         aenv       (ana/empty-env)
         sb         (StringBuffer.)
@@ -971,7 +1040,9 @@
                      (:source-map opts) (assoc :*sm-data* (sm-data)))
         aname      (cond-> name (:macros-ns opts) ana/macro-ns-name)]
     (when (:verbose opts) (debug-prn "Evaluating" name))
-    ((fn compile-loop [ns]
+    (clear-fns!)
+    (trampoline
+     (fn compile-loop [ns]
        (binding [env/*compiler*         (:*compiler* bound-vars)
                  *eval-fn*              (:*eval-fn* bound-vars)
                  ana/*cljs-ns*          ns
@@ -1015,20 +1086,22 @@
                         (do
                           (.append sb
                             (with-out-str (comp/emitln (str "goog.provide(\"" (comp/munge (:name ast)) "\");"))))
-                          (ns-side-effects true bound-vars aenv ast opts
+                          ((trampoline-safe ns-side-effects) true bound-vars aenv ast opts
                             (fn [res]
                               (if (:error res)
                                 (cb res)
                                 (let [ns-name (:name ast)]
                                   (when-not (nil? node-deps)
-                                    (node-side-effects bound-vars sb node-deps ns-name))
+                                    (node-side-effects bound-vars sb node-deps ns-name (:def-emits-var opts)))
                                   (global-exports-side-effects bound-vars sb
                                     (filter ana/dep-has-global-exports? (:deps ast))
-                                    ns-name)
-                                  (compile-loop ns'))))))
+                                    ns-name
+                                    (:def-emits-var opts))
+                                  (trampoline compile-loop ns'))))))
                         (do
-                          (.append sb (with-out-str (comp/emit ast)))
-                          (recur ns'))))))
+                          (env/with-compiler-env (assoc @(:*compiler* bound-vars) :options opts)
+                            (.append sb (with-out-str (comp/emit ast))))
+                          #(compile-loop ns'))))))
                  (do
                    (when (:source-map opts)
                      (append-source-map env/*compiler*
@@ -1053,7 +1126,7 @@
                                                        (wrap-error (ana/error aenv "ERROR" cause))))]
                                            (cb res)))))]
                      (if-let [f (:cache-source opts)]
-                       (f evalm complete)
+                       ((trampoline-safe f) evalm complete)
                        (complete {:value nil}))))))))))
       (:*cljs-ns* bound-vars))))
 
@@ -1067,7 +1140,7 @@
     the ClojureScript source
 
   name (symbol or string)
-    optional, the name of the source
+    optional, the name of the source - used as key in :source-maps
 
   opts (map)
     compilation options.
@@ -1118,10 +1191,66 @@
      {:*compiler*     state
       :*data-readers* tags/*cljs-data-readers*
       :*analyze-deps* (:analyze-deps opts true)
+      :*cljs-dep-set* ana/*cljs-dep-set*
       :*load-macros*  (:load-macros opts true)
       :*load-fn*      (or (:load opts) *load-fn*)
       :*eval-fn*      (or (:eval opts) *eval-fn*)}
      source name opts cb)))
+
+;;; Support for cljs.core/eval
+
+;; The following volatiles and fns set up a scheme to
+;; emit function values into JavaScript as numeric
+;; references that are looked up. Needed to implement eval.
+
+(defonce ^:private fn-index (volatile! 0))
+(defonce ^:private fn-refs (volatile! {}))
+
+(defn- clear-fns!
+  "Clears saved functions."
+  []
+  (vreset! fn-refs {}))
+
+(defn- put-fn
+  "Saves a function, returning a numeric representation."
+  [f]
+  (let [n (vswap! fn-index inc)]
+    (vswap! fn-refs assoc n f)
+    n))
+
+(defn- get-fn
+  "Gets a function, given its numeric representation."
+  [n]
+  (get @fn-refs n))
+
+(defn- emit-fn [f]
+  (print "cljs.js.get_fn(" (put-fn f) ")"))
+
+(defmethod comp/emit-constant js/Function
+  [f]
+  (emit-fn f))
+
+(defmethod comp/emit-constant cljs.core/Var
+  [f]
+  (emit-fn f))
+
+(defn- eval-impl
+  ([form]
+   (eval-impl form (.-name *ns*)))
+  ([form ns]
+   (let [result (atom nil)]
+     (let [st env/*compiler*]
+       (eval st form
+         {:ns            ns
+          :context       :expr
+          :def-emits-var true}
+         (fn [{:keys [value error]}]
+           (if error
+             (throw error)
+             (reset! result value)))))
+     @result)))
+
+(set! *eval* eval-impl)
 
 (comment
   (require '[cljs.js :as cljs]

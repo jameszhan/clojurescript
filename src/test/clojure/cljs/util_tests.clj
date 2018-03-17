@@ -29,8 +29,34 @@
           (sort (util/unknown-opts #{:optimisations :bogus} #{:optimizations :static-fns}))))))
 
 (deftest test-relative-name
-  (let [initial (System/getProperty "user.dir")]
-    (System/setProperty "user.dir" "/Users/user/clojurescript")
-    (is (= (util/relative-name (io/file "/Users/user/clojurescript/out/index.js")) "out/index.js"))
-    (is (= (util/relative-name (io/as-url (io/file "/Users/user/clojurescript/out/index.js"))) "out/index.js"))
-    (System/setProperty "user.dir" initial)))
+  (if util/windows?
+    (let [initial (System/getProperty "user.dir")]
+      (System/setProperty "user.dir" "C:\\Users\\anmonteiro\\Downloads\\clojurescript-master")
+      (is (= (util/relative-name (io/file "C:\\Users\\anmonteiro\\Downloads\\clojurescript-master\\out\\index.js")) "out\\index.js"))
+      (is (= (util/relative-name (io/as-url (io/file "C:\\Users\\anmonteiro\\Downloads\\clojurescript-master\\node_modules\\lodash\\array.js"))) "node_modules\\lodash\\array.js"))
+      ;; Check case-sensitivity:
+      (System/setProperty "user.dir" "c:\\users\\anmonteiro\\Downloads\\clojurescript-master")
+      (is (= (util/relative-name (io/file "C:\\Users\\anmonteiro\\Downloads\\clojurescript-master\\out\\index.js")) "out\\index.js"))
+      (is (= (util/relative-name (io/as-url (io/file "C:\\Users\\anmonteiro\\Downloads\\clojurescript-master\\node_modules\\lodash\\array.js"))) "node_modules\\lodash\\array.js"))
+      ;; Check pass-through:
+      (is (= (util/relative-name (io/file "C:\\Temp\\clojurescript\\out\\index.js")) "C:\\Temp\\clojurescript\\out\\index.js"))
+      (System/setProperty "user.dir" initial))
+    ;; Non-windows
+    (let [initial (System/getProperty "user.dir")]
+      (System/setProperty "user.dir" "/Users/user/clojurescript")
+      (is (= (util/relative-name (io/file "/Users/user/clojurescript/out/index.js")) "out/index.js"))
+      (is (= (util/relative-name (io/as-url (io/file "/Users/user/clojurescript/out/index.js"))) "out/index.js"))
+      ;; Check pass-through:
+      (is (= (util/relative-name (io/file "/tmp/clojurescript/out/index.js")) "/tmp/clojurescript/out/index.js"))
+      (System/setProperty "user.dir" initial))))
+
+(deftest test-path
+  (is (= (.getAbsolutePath (io/file "src/main/clojure/cljs/closure.clj"))
+         (util/path (io/as-url (io/file "src/main/clojure/cljs/closure.clj"))))))
+
+(deftest test-bytes-to-hex-str
+  (is (= "09616263" (#'util/bytes-to-hex-str (.getBytes "\u0009abc")))))
+
+(deftest test-content-sha
+  (is (= "40BD001563085FC35165329EA1FF5C5ECBDBBEEF" (util/content-sha "123")))
+  (is (= "40BD0" (util/content-sha "123" 5))))

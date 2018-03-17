@@ -752,7 +752,12 @@
                        (core/number? default) "number"
                        (core/or (core/true? default) (core/false? default)) "boolean")]
     `(do
-       (declare ~(symbol sym))
+       (declare ~(core/vary-meta sym
+                   (core/fn [m]
+                     (core/cond-> m
+                       (core/not (core/contains? m :tag))
+                       (core/assoc :tag (core/symbol type))
+                       ))))
        (~'js* ~(core/str "/** @define {" type "} */"))
        (goog/define ~defname ~default))))
 
@@ -819,7 +824,12 @@
       (core/inc (core/quot c 32)))))
 
 (core/defmacro str [& xs]
-  (core/let [strs (core/->> (repeat (count xs) "cljs.core.str.cljs$core$IFn$_invoke$arity$1(~{})")
+  (core/let [interpolate (core/fn [x]
+                           (if (core/string? x)
+                             "~{}"
+                             "cljs.core.str.cljs$core$IFn$_invoke$arity$1(~{})"))
+             strs (core/->> xs
+                    (map interpolate)
                     (interpose ",")
                     (apply core/str))]
     (list* 'js* (core/str "[" strs "].join('')") xs)))
@@ -845,6 +855,7 @@
            (map #(cljs.analyzer/no-warn (cljs.analyzer/analyze &env %)) forms))
        (core/let [and-str (core/->> (repeat (count forms) "(~{})")
                             (interpose " && ")
+                            (#(concat ["("] % [")"]))
                             (apply core/str))]
          (bool-expr `(~'js* ~and-str ~@forms)))
        `(let [and# ~x]
@@ -863,6 +874,7 @@
            (map #(cljs.analyzer/no-warn (cljs.analyzer/analyze &env %)) forms))
        (core/let [or-str (core/->> (repeat (count forms) "(~{})")
                            (interpose " || ")
+                           (#(concat ["("] % [")"]))
                            (apply core/str))]
          (bool-expr `(~'js* ~or-str ~@forms)))
        `(let [or# ~x]
@@ -1671,8 +1683,10 @@
   [rsym rname fields]
   (core/let [fn-name (with-meta (symbol (core/str '-> rsym))
                        (assoc (meta rsym) :factory :positional))
+             docstring (core/str "Positional factory function for " rname ".")
         field-values (if (core/-> rsym meta :internal-ctor) (conj fields nil nil nil) fields)]
     `(defn ~fn-name
+       ~docstring
        [~@fields]
        (new ~rname ~@field-values))))
 
@@ -1825,7 +1839,7 @@
                                                    (not-empty (dissoc ~'__extmap k#))
                                                    nil)))
                         'ISeqable
-                        `(~'-seq [this#] (seq (concat [~@(map #(core/list `vector (keyword %) %) base-fields)]
+                        `(~'-seq [this#] (seq (concat [~@(map #(core/list 'cljs.core.MapEntry. (keyword %) % nil) base-fields)]
                                                 ~'__extmap)))
 
                         'IIterable
@@ -1854,10 +1868,11 @@
 (core/defn- build-map-factory [rsym rname fields]
   (core/let [fn-name (with-meta (symbol (core/str 'map-> rsym))
                        (assoc (meta rsym) :factory :map))
+             docstring (core/str "Factory function for " rname ", taking a map of keywords to field values.")
              ms (gensym)
              ks (map keyword fields)
              getters (map (core/fn [k] `(~k ~ms)) ks)]
-    `(defn ~fn-name [~ms]
+    `(defn ~fn-name ~docstring [~ms]
        (new ~rname ~@getters nil (not-empty (dissoc ~ms ~@ks)) nil))))
 
 (core/defmacro defrecord
@@ -2172,8 +2187,7 @@
   predicate as its argument, the result of that call being the return
   value of condp. A single default expression can follow the clauses,
   and its value will be returned if no clause matches. If no default
-  expression is provided and no clause matches, an
-  IllegalArgumentException is thrown."
+  expression is provided and no clause matches, an Error is thrown."
   {:added "1.0"}
 
   [pred expr & clauses]
@@ -2290,6 +2304,9 @@
            ~@(mapcat (core/fn [[m c]] `((cljs.core/= ~m ~esym) ~c)) pairs)
            :else ~default)))))
 
+(core/defmacro ^:private when-assert [x]
+  (core/when *assert* x))
+
 (core/defmacro assert
   "Evaluates expr and throws an exception if it does not evaluate to
   logical true."
@@ -2401,7 +2418,7 @@
   (core/let [err (core/fn [& msg] (throw (ex-info (apply core/str msg) {})))
              step (core/fn step [recform exprs]
                     (core/if-not exprs
-                      [true `(do ~@body)]
+                      [true `(do ~@body nil)]
                       (core/let [k (first exprs)
                                  v (second exprs)
 
@@ -2476,11 +2493,11 @@
 (core/defmacro list
   ([]
    '(.-EMPTY cljs.core/List))
+  ([x]
+   `(cljs.core/List. nil ~x nil 1 nil))
   ([x & xs]
-   (if (= :constant (:op (cljs.analyzer/no-warn (cljs.analyzer/analyze &env x))))
-     `(-conj (list ~@xs) ~x)
-     `(let [x# ~x]
-        (-conj (list ~@xs) x#)))))
+   (core/let [cnt (core/inc (count xs))]
+     `(cljs.core/List. nil ~x (list ~@xs) ~cnt nil))))
 
 (core/defmacro vector
   ([] '(.-EMPTY cljs.core/PersistentVector))
@@ -2568,9 +2585,10 @@
   array ret."
   [a idx ret expr]
   `(let [a# ~a
+         l# (alength a#)
          ~ret (cljs.core/aclone a#)]
      (loop  [~idx 0]
-       (if (< ~idx  (alength a#))
+       (if (< ~idx l#)
          (do
            (aset ~ret ~idx ~expr)
            (recur (inc ~idx)))
@@ -2581,9 +2599,10 @@
   and return value named ret, initialized to init, setting ret to the
   evaluation of expr at each step, returning ret."
   [a idx ret init expr]
-  `(let [a# ~a]
+  `(let [a# ~a
+         l# (alength a#)]
      (loop  [~idx 0 ~ret ~init]
-       (if (< ~idx  (alength a#))
+       (if (< ~idx l#)
          (recur (inc ~idx) ~expr)
          ~ret))))
 
@@ -2837,6 +2856,9 @@
   [x & forms]
   `(do ~@forms))
 
+;; An internal-use Var for defining specs on the ns special form
+(core/defmacro ^:private ns-special-form [])
+
 (core/defmacro require
   "Loads libs, skipping any that are already loaded. Each argument is
   either a libspec that identifies a lib or a flag that modifies how all the identified
@@ -2994,16 +3016,19 @@
                         `(fn
                            ([~restarg]
                             (let [~@(mapcat param-bind params)]
-                              (. ~sym (~(get-delegate) ~@params ~restarg))))))
+                              (this-as self#
+                                (. self# (~(get-delegate) ~@params ~restarg)))))))
                       `(fn
                          ([~restarg]
-                          (. ~sym (~(get-delegate) (seq ~restarg)))))))]
+                          (this-as self#
+                            (. self# (~(get-delegate) (seq ~restarg))))))))]
        `(do
           (set! (. ~sym ~(get-delegate-prop))
             (fn (~(vec sig) ~@body)))
           ~@(core/when solo
               `[(set! (. ~sym ~'-cljs$lang$maxFixedArity)
                   ~(core/dec (count sig)))])
+          (js-inline-comment " @this {Function} ")
           (set! (. ~sym ~'-cljs$lang$applyTo)
             ~(apply-to)))))))
 
@@ -3036,8 +3061,7 @@
                (let [argseq# (when (< ~c-1 (alength args#))
                                (new ^::ana/no-resolve cljs.core/IndexedSeq
                                  (.slice args# ~c-1) 0 nil))]
-                 (. ~rname
-                   (~'cljs$core$IFn$_invoke$arity$variadic ~@(dest-args c-1) argseq#))))))
+                 (. ~rname (~'cljs$core$IFn$_invoke$arity$variadic ~@(dest-args c-1) argseq#))))))
          ~(variadic-fn* rname method)
          ~(core/when emit-var? `(var ~name))))))
 
@@ -3126,7 +3150,8 @@
     to the var metadata. prepost-map defines a map with optional keys
     :pre and :post that contain collections of pre or post conditions."
     :arglists '([name doc-string? attr-map? [params*] prepost-map? body]
-                 [name doc-string? attr-map? ([params*] prepost-map? body)+ attr-map?])}
+                 [name doc-string? attr-map? ([params*] prepost-map? body)+ attr-map?])
+    :macro true}
   defn (core/fn defn [&form &env name & fdecl]
          ;; Note: Cannot delegate this check to def because of the call to (with-meta name ..)
          (if (core/instance? #?(:clj clojure.lang.Symbol :cljs Symbol) name)

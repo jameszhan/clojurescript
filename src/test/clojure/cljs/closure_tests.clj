@@ -10,6 +10,8 @@
   (:refer-clojure :exclude [compile])
   (:use cljs.closure clojure.test)
   (:require [cljs.build.api :as build]
+            [clojure.data.json :as json]
+            [clojure.java.shell :as sh]
             [cljs.closure :as closure]
             [cljs.js-deps :as deps]
             [cljs.util :as util]
@@ -66,7 +68,9 @@
         (.add module (closure/js-source-file nil (io/file out file))))
       (.sortInputsByDeps module compiler)
       (is (= (->> (.getInputs module)
-                  (map #(string/replace (.getName %) (str out File/separator) "")))
+                  (map #(string/replace
+                          (.getName %)
+                          (str (string/replace out #"[\\\/]" "/") "/") "")))
              ["cljs/core.js"
               "cljs/core/constants.js"
               "module_test/modules/a.js"])))))
@@ -141,6 +145,19 @@
                                       "@comandeer/css-filter/dist/css-filter.umd"
                                       "@comandeer/css-filter"]}))
                  modules))))
+  (test/delete-node-modules)
+  (spit (io/file "package.json") "{}")
+  (closure/maybe-install-node-deps! {:npm-deps {"jss-extend" "5.0.0"}})
+  (let [modules (closure/index-node-modules-dir)]
+    (is (true? (some (fn [module]
+                       (= module
+                         {:file (.getAbsolutePath (io/file "node_modules/jss-extend/lib/index.js"))
+                          :module-type :es6
+                          :provides ["jss-extend/lib/index.js"
+                                     "jss-extend/lib/index"
+                                     "jss-extend"
+                                     "jss-extend/lib"]}))
+                 modules))))
   (.delete (io/file "package.json"))
   (test/delete-node-modules))
 
@@ -185,7 +202,8 @@
     (test/delete-node-modules)
     (spit (io/file "package.json") "{}")
     (test/delete-out-files out)
-    (let [opts {:npm-deps {:node-fetch "1.7.1"}}]
+    (let [opts {:npm-deps {:node-fetch "1.7.1"}
+                :target :nodejs}]
       (closure/maybe-install-node-deps! opts)
       (is (true? (some (fn [module]
                          (= module {:module-type :es6
@@ -207,6 +225,255 @@
                                        "@comandeer/css-filter/dist/css-filter.umd.js"
                                        "@comandeer/css-filter/dist/css-filter.umd"]}))
                    (closure/index-node-modules ["@comandeer/css-filter"] opts)))))
+    (test/delete-node-modules)
+    (spit (io/file "package.json") "{}")
+    (test/delete-out-files out)
+    (let [opts {:npm-deps {"jss-extend" "5.0.0"}}]
+      (closure/maybe-install-node-deps! opts)
+      (is (true? (some (fn [module]
+                         (= module
+                           {:file (.getAbsolutePath (io/file "node_modules/jss-extend/lib/index.js"))
+                            :module-type :es6
+                            :provides ["jss-extend"
+                                       "jss-extend/lib/index.js"
+                                       "jss-extend/lib/index"
+                                       "jss-extend/lib"]}))
+                   (closure/index-node-modules ["jss-extend"] opts)))))
+    (.delete (io/file "package.json"))
+    (test/delete-node-modules)
+    (test/delete-out-files out)))
+
+(deftest test-cljs-2315
+  (spit (io/file "package.json") (json/json-str {:devDependencies {"@cljs-oss/module-deps" "*"}}))
+  (apply sh/sh (cond->> ["npm" "install"]
+                 util/windows? (into ["cmd" "/c"])))
+  (let [file (io/file (test/tmp-dir) "cljs-2315-inputs.js")
+        _ (spit file "require('./src/test/cljs_build/json_modules_test/a.js');")
+        node-inputs (closure/node-inputs [{:file (str file)}])]
+    (is (= node-inputs
+          [{:file (.getAbsolutePath (io/file "src/test/cljs_build/json_modules_test/a.js"))
+            :module-type :es6}
+           {:file (.getAbsolutePath (io/file "src/test/cljs_build/json_modules_test/b.json"))
+            :module-type :es6}])))
+  (.delete (io/file "package.json"))
+  (test/delete-node-modules))
+
+(deftest test-cljs-2318
+  (spit (io/file "package.json") "{}")
+  (let [opts {:npm-deps {:react     "15.6.1"
+                         :react-dom "15.6.1"
+                         :react-addons-css-transition-group "15.5.1"
+                         "@blueprintjs/core" "1.24.0"}}
+        out (util/output-directory opts)]
+    (test/delete-node-modules)
+    (test/delete-out-files out)
+    (closure/maybe-install-node-deps! opts)
+    (is (true? (some (fn [module]
+                       (= module {:module-type :es6
+                                  :file (.getAbsolutePath (io/file "node_modules/tslib/tslib.es6.js"))
+                                  :provides ["tslib"
+                                             "tslib/tslib.es6.js"
+                                             "tslib/tslib.es6"]}))
+                 (closure/index-node-modules ["tslib"] opts))))
+    (.delete (io/file "package.json"))
+    (test/delete-node-modules)
+    (test/delete-out-files out)))
+
+(deftest test-cljs-2327
+  (spit (io/file "package.json") "{}")
+  (let [opts {:npm-deps {:react "16.0.0-beta.5"
+                         :react-dom "16.0.0-beta.5"}}
+        out (util/output-directory opts)]
+    (test/delete-node-modules)
+    (test/delete-out-files out)
+    (closure/maybe-install-node-deps! opts)
+    (let [modules (closure/index-node-modules ["react" "react-dom" "react-dom/server"] opts)]
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/react/index.js"))
+                                    :provides ["react"
+                                               "react/index.js"
+                                               "react/index"]}))
+                   modules)))
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/react-dom/index.js"))
+                                    :provides ["react-dom"
+                                               "react-dom/index.js"
+                                               "react-dom/index"]}))
+                   modules)))
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/react-dom/server.browser.js"))
+                                    :provides ["react-dom/server.js"
+                                               "react-dom/server"
+                                               "react-dom/server.browser.js"
+                                               "react-dom/server.browser"]}))
+                   modules))))
+    (test/delete-node-modules)
+    (test/delete-out-files out)
+    (spit (io/file "package.json") "{}")
+    (let [opts {:npm-deps {:warning "3.0.0"}}
+          _ (closure/maybe-install-node-deps! opts)
+          modules (closure/index-node-modules ["warning"] opts)]
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/warning/browser.js"))
+                                    :provides ["warning"
+                                               "warning/browser.js"
+                                               "warning/browser"]}))
+                   modules))))
+    (test/delete-node-modules)
+    (test/delete-out-files out)
+    (spit (io/file "package.json") "{}")
+    (let [opts {:npm-deps {:react-dom "16.0.0-beta.5"
+                           :react "16.0.0-beta.5"}
+                :target :nodejs}
+          _ (closure/maybe-install-node-deps! opts)
+          modules (closure/index-node-modules ["react-dom/server"] opts)]
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/react-dom/server.js"))
+                                    :provides ["react-dom/server.js"
+                                               "react-dom/server"]}))
+                   modules))))
+    (.delete (io/file "package.json"))
+    (test/delete-node-modules)
+    (test/delete-out-files out)))
+
+(deftest test-cljs-2326
+  (spit (io/file "package.json") "{}")
+  (let [opts {:npm-deps {:bootstrap "4.0.0-beta"}}
+        out (util/output-directory opts)]
+    (test/delete-node-modules)
+    (test/delete-out-files out)
+    (closure/maybe-install-node-deps! opts)
+    (is (true? (some (fn [module]
+                       (= module {:module-type :es6
+                                  :file (.getAbsolutePath (io/file "node_modules/bootstrap/dist/js/bootstrap.js"))
+                                  :provides ["bootstrap"
+                                             "bootstrap/dist/js/bootstrap.js"
+                                             "bootstrap/dist/js/bootstrap"]}))
+                 (closure/index-node-modules ["bootstrap"] opts))))
+    (test/delete-node-modules)
+    (spit (io/file "package.json") "{}")
+    (test/delete-out-files out))
+  (closure/maybe-install-node-deps! {:npm-deps {:bootstrap "4.0.0-beta"}})
+  (let [modules (closure/index-node-modules-dir)]
+    (is (true? (some (fn [module]
+                       (= module {:module-type :es6
+                                  :file (.getAbsolutePath (io/file "node_modules/bootstrap/dist/js/bootstrap.js"))
+                                  :provides ["bootstrap/dist/js/bootstrap.js"
+                                             "bootstrap/dist/js/bootstrap"
+                                             "bootstrap"]}))
+                 modules))))
+  (.delete (io/file "package.json"))
+  (test/delete-node-modules))
+
+(deftest test-cljs-2332
+  (spit (io/file "package.json") "{}")
+  (let [opts {:npm-deps {"@material/drawer" "0.5.4"}}
+        out (util/output-directory opts)]
+    (test/delete-node-modules)
+    (test/delete-out-files out)
+    (closure/maybe-install-node-deps! opts)
+    (let [modules (closure/index-node-modules ["@material/drawer"] opts)]
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/@material/drawer/slidable/constants.js"))
+                                    :provides ["@material/drawer/slidable/constants.js"
+                                               "@material/drawer/slidable/constants"]}))
+                   modules))))
+    (.delete (io/file "package.json"))
+    (test/delete-node-modules)
+    (test/delete-out-files out)))
+
+(deftest test-cljs-2333
+  (spit (io/file "package.json") "{}")
+  (let [opts {:npm-deps {"asap" "2.0.6"}}
+        out (util/output-directory opts)]
+    (test/delete-node-modules)
+    (test/delete-out-files out)
+    (closure/maybe-install-node-deps! opts)
+    (let [modules (closure/index-node-modules ["asap"] opts)]
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/asap/browser-asap.js"))
+                                    :provides ["asap/asap",
+                                               "asap/asap",
+                                               "asap/asap.js",
+                                               "asap/asap",
+                                               "asap",
+                                               "asap/browser-asap.js",
+                                               "asap/browser-asap"]}))
+                   modules))))
+    (.delete (io/file "package.json"))
+    (test/delete-node-modules)
+    (test/delete-out-files out)))
+
+(deftest test-cljs-2580
+  (spit (io/file "package.json") "{}")
+  (let [opts {:npm-deps {"pg" "7.4.1"
+                         "pg-native" "2.2.0"}
+              :target :nodejs}
+        out (util/output-directory opts)]
+    (test/delete-node-modules)
+    (test/delete-out-files out)
+    (closure/maybe-install-node-deps! opts)
+    (let [modules (closure/index-node-modules-dir)]
+      (is (true? (some (fn [module]
+                         (= module
+                           {:file (.getAbsolutePath (io/file "node_modules/pg/lib/index.js"))
+                            :module-type :es6
+                            :provides ["pg/lib/index.js"
+                                       "pg/lib/index"
+                                       "pg"
+                                       "pg/lib"]}))
+                   modules))))
+    (let [modules (closure/index-node-modules ["pg"] opts)]
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/pg/lib/index.js"))
+                                    :provides ["pg"
+                                               "pg/lib/index.js"
+                                               "pg/lib/index"
+                                               "pg/lib"]}))
+                   modules))))
+    (.delete (io/file "package.json"))
+    (test/delete-node-modules)
+    (test/delete-out-files out)))
+
+(deftest test-cljs-2592
+  (spit (io/file "package.json") "{}")
+  (let [opts {:npm-deps {:iterall "1.2.2"
+                         :graphql "0.13.1"}
+              :package-json-resolution :nodejs}
+        out  (util/output-directory opts)]
+    (test/delete-node-modules)
+    (test/delete-out-files out)
+    (closure/maybe-install-node-deps! opts)
+    (let [modules (closure/index-node-modules ["iterall" "graphql"] opts)]
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/iterall/index.js"))
+                                    :provides ["iterall"
+                                               "iterall/index.js"
+                                               "iterall/index"]}))
+                       modules)))
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/graphql/index.js"))
+                                    :provides ["graphql"
+                                               "graphql/index.js"
+                                               "graphql/index"]}))
+                       modules)))
+      (is (true? (some (fn [module]
+                         (= module {:module-type :es6
+                                    :file (.getAbsolutePath (io/file "node_modules/graphql/execution/index.js"))
+                                    :provides ["graphql/execution/index.js"
+                                               "graphql/execution/index"
+                                               "graphql/execution"]}))
+                       modules))))
     (.delete (io/file "package.json"))
     (test/delete-node-modules)
     (test/delete-out-files out)))

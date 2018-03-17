@@ -55,7 +55,7 @@
 
     (testing "IEmptyableCollection"
       (testing "-empty"
-        (is (= [] (empty e)))))
+        (is (= (if (instance? PersistentVector e) [] nil) (empty e)))))
 
     (testing "ISequential"
       (is (satisfies? ISequential e)))
@@ -63,6 +63,10 @@
     (testing "ISeqable"
       (testing "-seq"
         (is (= (list :key :val) (-seq e)))))
+
+    (testing "IReversible"
+      (testing "-rseq"
+        (is (= (list :val :key) (-rseq e)))))
 
     (testing "ICounted"
       (testing "-count"
@@ -139,7 +143,5 @@
     (map-entry-interface-tests (BlackNode. :key :val nil nil nil)))
   (testing "RedNode"
     (map-entry-interface-tests (RedNode. :key :val nil nil nil)))
-  (testing "Vector"
-    (map-entry-interface-tests [:key :val]))
   (testing "MapEntry"
     (map-entry-interface-tests (MapEntry. :key :val nil))))

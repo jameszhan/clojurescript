@@ -8,7 +8,7 @@
 
 (ns cljs.core-test
   (:refer-clojure :exclude [iter])
-  (:require [cljs.test :refer-macros [deftest testing is]]
+  (:require [cljs.test :refer-macros [deftest testing is are]]
             [clojure.test.check :as tc]
             [clojure.test.check.clojure-test :refer-macros [defspec]]
             [clojure.test.check.generators :as gen]
@@ -136,7 +136,9 @@
                 (js->clj (js* "[[{\"a\":1,\"b\":2}, {\"a\":1,\"b\":2}]]") :keywordize-keys true)))
       (is (= [[{:a 1, :b 2} {:a 1, :b 2}]]
                 (js->clj [[{:a 1, :b 2} {:a 1, :b 2}]])))
-      (is (= (js->clj nil) nil)))
+      (is (= (js->clj nil) nil))
+      (let [map-entry (->MapEntry #js {:foo 1} #js [1 2] nil)]
+        (is (= (->MapEntry {"foo" 1} [1 2] nil) (js->clj map-entry)))))
     (testing "clj->js"
       (is (= (clj->js 'a) "a"))
       (is (= (clj->js :a) "a"))
@@ -153,7 +155,13 @@
                    (gobject/get "a")
                    (gobject/get "b")
                    (gobject/get "{:k :ey}"))
-                "d")))))
+                "d")))
+    (is (= (-> (clj->js {:foo/bar "a"})
+               (gobject/get "bar"))
+           "a"))
+    (is (= (-> (clj->js {:foo/bar "a"} :keyword-fn namespace)
+               (gobject/get "foo"))
+           "a"))))
 
 (deftest test-delay
   (let [a (atom 0)
@@ -722,27 +730,6 @@
 (deftest test-518
   (is (nil? (:test "test"))))
 
-;; r1798 core fn protocol regression
-(extend-type object
-  ISeqable
-  (-seq [coll]
-    (map #(vector % (aget coll %)) (js-keys coll)))
-
-  ILookup
-  (-lookup
-    ([coll k]
-     (-lookup coll k nil))
-    ([coll k not-found]
-     (if-let [v (aget coll k)]
-       v
-       not-found))))
-
-(deftest test-extend-to-object
-  (is (= (seq (js-obj "foo" 1 "bar" 2)) '(["foo" 1] ["bar" 2])))
-  (is (= (get (js-obj "foo" 1) "foo") 1))
-  (is (= (get (js-obj "foo" 1) "bar" ::not-found) ::not-found))
-  (is (= (reduce (fn [s [k v]] (+ s v)) 0 (js-obj "foo" 1 "bar" 2)) 3)))
-
 (deftest test-541
   (letfn [(f! [x] (print \f) x)
           (g! [x] (print \g) x)]
@@ -1175,11 +1162,11 @@
            [:foo]))))
 
 (deftest test-cljs-1594
-  (is  (not (js/isNaN (hash Infinity))))
-  (is  (not (js/isNaN (hash -Infinity))))
-  (is  (not (js/isNaN (hash NaN))))
-  (is  (=  (hash-set Infinity -Infinity 0 1 2 3 4 5 6 7 8)
-          (set  (keys  (zipmap  [Infinity -Infinity 0 1 2 3 4 5 6 7 8]  (repeat nil)))))))
+  (is  (not (js/isNaN (hash js/Infinity))))
+  (is  (not (js/isNaN (hash js/-Infinity))))
+  (is  (not (js/isNaN (hash js/NaN))))
+  (is  (=  (hash-set js/Infinity js/-Infinity 0 1 2 3 4 5 6 7 8)
+          (set  (keys  (zipmap  [js/Infinity js/-Infinity 0 1 2 3 4 5 6 7 8]  (repeat nil)))))))
 
 (deftest test-cljs-1590
   (is (= [""] (s/split "" #"\n")))
@@ -1448,6 +1435,108 @@
   (is (= "#js {:_abc 1}" (pr-str #js {"_abc" 1})))
   (is (= "#js {:*compiler* 1}" (pr-str #js {"*compiler*" 1}))))
 
+(deftest test-cljs-2403
+  (are [f k coll expected] (= expected (apply f k coll))
+    min-key :x [{:x 1000} {:x 1001} {:x 1002} {:x 1000 :second true}] {:x 1000 :second true}
+    max-key :x [{:x 1000} {:x 999} {:x 998} {:x 1000 :second true}] {:x 1000 :second true}))
+
+(deftest swap-vals-returns-old-value
+  (let [a (atom 0)]
+    (is (= [0 1] (swap-vals! a inc)))
+    (is (= [1 2] (swap-vals! a inc)))
+    (is (= 2 @a))))
+
+(deftest deref-swap-arities
+  (let [a (atom 0)]
+    (is (= [0 1] (swap-vals! a + 1)))
+    (is (= [1 3] (swap-vals! a + 1 1)))
+    (is (= [3 6] (swap-vals! a + 1 1 1)))
+    (is (= [6 10] (swap-vals! a + 1 1 1 1)))
+    (is (= 10 @a))))
+
+(deftest deref-reset-returns-old-value
+  (let [a (atom 0)]
+    (is (= [0 :b] (reset-vals! a :b)))
+    (is (= [:b 45M] (reset-vals! a 45M)))
+    (is (= 45M @a))))
+
+(deftest reset-on-deref-reset-equality
+  (let [a (atom :usual-value)]
+    (is (= :usual-value (reset! a (first (reset-vals! a :almost-never-seen-value)))))))
+
+(deftest test-cljs-2374
+  (is (= "##NaN" (pr-str js/NaN)))
+  (is (= "##Inf" (pr-str js/Infinity)))
+  (is (= "##-Inf" (pr-str js/-Infinity))))
+
+(deftest test-cljs-2449
+  (is (= 1 (let [catch identity] (catch 1))))
+  (is (= 1 (let [finally identity] (finally 1)))))
+
+(deftype Foo2407 [x y])
+(defrecord Bar2407 [x y])
+
+(deftest test-cljs-2407
+  (is (= "Positional factory function for cljs.core-test/Foo2407." (:doc (meta #'->Foo2407))))
+  (is (= "Positional factory function for cljs.core-test/Bar2407." (:doc (meta #'->Bar2407))))
+  (is (= "Factory function for cljs.core-test/Bar2407, taking a map of keywords to field values." (:doc (meta #'map->Bar2407)))))
+
+(deftest test-cljs-2283
+  (is (nil? (doseq []))))
+
+(deftest test-cljs-2453
+  (is (= (re-seq #"[Bc]?" "aBcD") '("" "B" "c" "" "")))
+  (is (= (re-seq #"[BcD]?$" "aBcD") '("D" "")))
+  (is (= (map first (re-seq #"(\d+)" "ClojureScript 1.9.222")) '("1" "9" "222")))
+  (is (= (re-seq #"\d+" "a1b2c3d") '("1" "2" "3")))
+  (is (= (re-seq #"\d?" "a1b2c3d") '("" "1" "" "2" "" "3" "" "")))
+  (is (= (re-seq #"\d*" "a1b2c3d") '("" "1" "" "2" "" "3" "" "")))
+  (is (= (re-seq #"\d+" "a1b22c333d") '("1" "22" "333")))
+  (is (= (re-seq #"\d?" "a1b22c333d") '("" "1" "" "2" "2" "" "3" "3" "3" "" "")))
+  (is (= (re-seq #"\d*" "a1b22c333d") '("" "1" "" "22" "" "333" "" "")))
+  (is (= (re-seq #"\w+" "once upon a time") '("once" "upon" "a" "time")))
+  (is (nil? (re-seq #"\w+" ""))))
+
+(deftest test-cljs-2001
+  (is (map-entry? (MapEntry. :key :val 0)))
+  (is (not (map-entry? [:key :val]))))
+
+(deftype Foo2455 []
+  ISequential)
+
+(deftest test-cljs-2455
+  (is (= :x (nth (eduction [:x]) 0)))
+  (is (thrown-with-msg? js/Error #"Index out of bounds" (nth (eduction [:x]) 1)))
+  (is (= :x (nth (eduction [:x]) 0 :not-found)))
+  (is (= :not-found (nth (eduction [:x]) 1 :not-found)))
+  ;; Calling nth on a type satisfying ISequential should attempt coercion
+  (is (thrown-with-msg? js/Error #".* is not ISeqable" (nth (->Foo2455) 0))))
+
+(deftest test-cljs-2457
+  (is (thrown-with-msg? js/Error #".* is not ISeqable" (seq #js {:a 1 :b 2}))))
+
+(deftest test-cljs-2549
+  (let [tap (fn [_])]
+    (add-tap tap)
+    (is (set? @tapset))
+    (is (contains? @tapset tap))
+    (remove-tap tap)))
+
+(deftest test-cljs-2552
+  (is (boolean? (tap> nil))))
+
+;; Delete a bogus property from the beta? fn
+;; Without the fix this js-delete form code-gens to code that deletes the alpha? fn:
+;;   delete (cljs.core_test.alpha_2585_QMARK_) && (cljs.core_test.beta_2585_QMARK_)["bogus-property"]
+(defn ^boolean alpha-2585? [] true)
+(defn ^boolean beta-2585? [] true)
+(js-delete (and alpha-2585? beta-2585?) "bogus-property")
+
+(deftest test-cljs-2585
+  (is (= true ((or int? string?) 1)))
+  ;; Make sure we didn't delete the alpha? fn
+  (is (some? alpha-2585?)))
+
 (comment
   ;; ObjMap
   ;; (let [ks (map (partial str "foo") (range 500))
@@ -1468,3 +1557,13 @@
   ;;   (assert (= (:arglists var-meta) '([a b]))))
 
   )
+
+(deftest uri-predicate
+  (testing "Testing uri?"
+    (is (not (uri? "http://clojurescript.org")))
+    (is (not (uri? 42)))
+    (is (not (uri? [])))
+    (is (not (uri? {})))
+    (is (uri? (goog.Uri. "")))
+    (is (uri? (goog.Uri. "http://clojurescript.org")))
+    (is (uri? (goog.Uri. "some string")))))

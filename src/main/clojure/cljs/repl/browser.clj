@@ -9,18 +9,20 @@
 (ns cljs.repl.browser
   (:refer-clojure :exclude [loaded-libs])
   (:require [clojure.java.io :as io]
+            [clojure.java.browse :as browse]
             [clojure.string :as string]
             [clojure.edn :as edn]
-            [cljs.compiler :as comp]
+            [clojure.data.json :as json]
             [cljs.util :as util]
             [cljs.env :as env]
             [cljs.closure :as cljsc]
             [cljs.repl :as repl]
+            [cljs.cli :as cli]
             [cljs.repl.server :as server]
             [cljs.stacktrace :as st]
-            [cljs.analyzer :as ana])
-  (:import [java.util.regex Pattern]
-           [java.util.concurrent Executors]))
+            [cljs.analyzer :as ana]
+            [cljs.build.api :as build])
+  (:import [java.util.concurrent Executors]))
 
 (def ^:dynamic browser-state nil)
 (def ^:dynamic ordering nil)
@@ -33,6 +35,7 @@
    ".jpg" "image/jpeg"
    ".png" "image/png"
    ".gif" "image/gif"
+   ".svg" "image/svg+xml"
 
    ".js" "text/javascript"
    ".json" "application/json"
@@ -48,6 +51,7 @@
    "image/jpeg" "ISO-8859-1"
    "image/png" "ISO-8859-1"
    "image/gif" "ISO-8859-1"
+   "image/svg+xml" "UTF-8"
    "text/javascript" "UTF-8"
    "text/x-clojure" "UTF-8"
    "application/json" "UTF-8"})
@@ -66,7 +70,11 @@
     (send-for-eval @(server/connection) form return-value-fn))
   ([conn form return-value-fn]
     (set-return-value-fn return-value-fn)
-    (server/send-and-close conn 200 form "text/javascript")))
+    (server/send-and-close conn 200
+      (json/write-str
+        {"thread" (.getName (Thread/currentThread))
+         "form"   form})
+      "application/json")))
 
 (defn- return-value
   "Called by the server when a return value is received."
@@ -90,39 +98,98 @@
          "</body></html>")
     "text/html"))
 
-(defn send-static [{path :path :as request} conn opts]
-  (if (and (:static-dir opts)
-           (not= "/favicon.ico" path))
-    (let [path   (if (= "/" path) "/index.html" path)
-          st-dir (:static-dir opts)
+(defn default-index [output-to]
+  (str
+    "<!DOCTYPE html><html>"
+    "<head>"
+    "<meta charset=\"UTF-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" >"
+    "<link rel=\"shortcut icon\" type=\"image/x-icon\" href=\"cljs-logo-icon-32.png\"/>"
+    "</head>"
+    "<body>"
+    "<div id=\"app\">"
+    "<link href=\"https://fonts.googleapis.com/css?family=Open+Sans\" rel=\"stylesheet\">"
+    "<style>"
+    "body { padding: 40px; margin: auto; max-width: 38em; "
+    "font-family: \"Open Sans\", sans-serif; }"
+    "code { color: #4165a2; font-size: 17px; }"
+    "pre  { color: #4165a2; font-size: 15px; white-space: pre-wrap; }"
+    "</style>"
+    "<center><img src=\"cljs-logo.svg\" style=\"width: 200px; height: 200px; margin: 15px;\"/></center>"
+    "<p>Welcome to the ClojureScript browser REPL.</p>"
+    "<p>This page hosts your REPL and application evaluation environment. "
+    "Validate the connection by typing <code>(js/alert&nbsp;\"Hello&nbsp;CLJS!\")</code> in the REPL.</p>"
+    "<p>To provide your own custom page, place an <code>index.html</code> file in "
+    "the REPL launch directory, starting with this template:</p>"
+    "<pre>"
+    "&lt;!DOCTYPE html&gt;\n"
+    "&lt;html&gt;\n"
+    "  &lt;head&gt;\n"
+    "    &lt;meta charset=\"UTF-8\"&gt;\n"
+    "  &lt;/head&gt;\n"
+    "  &lt;body&gt;\n"
+    "    &lt;script src=\"" output-to "\" type=\"text/javascript\"&gt;&lt;/script&gt;\n"
+    "  &lt;/body&gt;\n"
+    "&lt;/html&gt;\n"
+    "</pre>"
+    "</div></div>"
+    "<script src=\"" output-to "\"></script>"
+    "</body></html>"))
+
+(defn send-static
+  [{path :path :as request} conn
+   {:keys [static-dir output-to output-dir host port gzip?] :or {output-dir "out"} :as opts}]
+  (let [output-dir (when-not (.isAbsolute (io/file output-dir)) output-dir)]
+    (if (and static-dir (not= "/favicon.ico" path))
+      (let [path (if (= "/" path) "/index.html" path)
+            local-path
+            (cond->
+              (seq (for [x (if (string? static-dir) [static-dir] static-dir)
+                         :when (.exists (io/file (str x path)))]
+                     (str x path)))
+              (complement nil?) first)
+            local-path
+            (if (nil? local-path)
+              (cond
+                (re-find #".jar" path)
+                (io/resource (second (string/split path #".jar!/")))
+                (string/includes? path (System/getProperty "user.dir"))
+                (io/file (string/replace path (str (System/getProperty "user.dir") "/") ""))
+                (#{"/cljs-logo-icon-32.png" "/cljs-logo.svg"} path)
+                (io/resource (subs path 1))
+                :else nil)
+              local-path)]
+        (cond
           local-path
-          (cond->
-            (seq (for [x (if (string? st-dir) [st-dir] st-dir)
-                       :when (.exists (io/file (str x path)))]
-                   (str x path)))
-            (complement nil?) first)
-          local-path
-          (if (nil? local-path)
-            (cond
-              (re-find #".jar" path)
-              (io/resource (second (string/split path #".jar!/")))
-              (re-find (Pattern/compile (System/getProperty "user.dir")) path)
-              (io/file (string/replace path (str (System/getProperty "user.dir") "/") ""))
-              :else nil)
-            local-path)]
-      (if local-path
-        (if-let [ext (some #(if (.endsWith path %) %) (keys ext->mime-type))]
-          (let [mime-type (ext->mime-type ext "text/plain")
-                encoding (mime-type->encoding mime-type "UTF-8")]
-            (server/send-and-close
-              conn
-              200
-              (slurp local-path :encoding encoding)
-              mime-type
-              encoding))
-          (server/send-and-close conn 200 (slurp local-path) "text/plain"))
-        (server/send-404 conn path)))
-    (server/send-404 conn path)))
+          (if-let [ext (some #(if (.endsWith path %) %) (keys ext->mime-type))]
+            (let [mime-type (ext->mime-type ext "text/plain")
+                  encoding (mime-type->encoding mime-type "UTF-8")]
+              (server/send-and-close conn 200 (slurp local-path :encoding encoding)
+                mime-type encoding (and gzip? (= "text/javascript" mime-type))))
+            (server/send-and-close conn 200 (slurp local-path) "text/plain"))
+          ;; "/index.html" doesn't exist, provide our own
+          (= path "/index.html")
+          (server/send-and-close conn 200
+            (default-index (or output-to (str output-dir "/main.js")))
+            "text/html" "UTF-8")
+          (= path (cond->> "/main.js" output-dir (str "/" output-dir )))
+          (let [closure-defines (-> `{clojure.browser.repl/HOST ~host
+                                      clojure.browser.repl/PORT ~port}
+                                  (merge (:closure-defines @browser-state))
+                                  cljsc/normalize-closure-defines
+                                  json/write-str)]
+            (server/send-and-close conn 200
+              (str "var CLOSURE_UNCOMPILED_DEFINES = " closure-defines ";\n"
+                   "var CLOSURE_NO_DEPS = true;\n"
+                   "document.write('<script src=\"" output-dir "/goog/base.js\"></script>');\n"
+                   "document.write('<script src=\"" output-dir "/goog/deps.js\"></script>');\n"
+                   (when (.exists (io/file output-dir "cljs_deps.js"))
+                     "document.write('<script src=\"" output-dir "/cljs_deps.js\"></script>');\n")
+                   "document.write('<script src=\"" output-dir "/brepl_deps.js\"></script>');\n"
+                   "document.write('<script>goog.require(\"clojure.browser.repl.preload\");</script>');\n")
+              "text/javascript" "UTF-8"))
+          :else (server/send-404 conn path)))
+      (server/send-404 conn path))))
 
 (server/dispatch-on :get
   (fn [{:keys [path]} _ _]
@@ -172,14 +239,14 @@
   (send-via es ordering add-in-order order f)
   (send-via es ordering run-in-order))
 
-(defmethod handle-post :print [{:keys [content order]} conn _ ]
+(defmethod handle-post :print [{:keys [content order]} conn _]
   (constrain-order order
     (fn []
       (print (read-string content))
       (.flush *out*)))
   (server/send-and-close conn 200 "ignore__"))
 
-(defmethod handle-post :result [{:keys [content order]} conn _ ]
+(defmethod handle-post :result [{:keys [content order]} conn _]
   (constrain-order order
     (fn []
       (return-value content)
@@ -212,49 +279,69 @@
   [repl-env provides url]
   (browser-eval (slurp url)))
 
+(defn serve [{:keys [host port output-dir] :as opts}]
+  (println "Serving HTTP on" host "port" port)
+  (binding [ordering (agent {:expecting nil :fns {}})
+            es (Executors/newFixedThreadPool 16)
+            server/state (atom {:socket nil})]
+    (server/start
+      (merge opts
+        {:static-dir (cond-> ["." "out/"] output-dir (conj output-dir))
+         :gzip? true}))))
 
 ;; =============================================================================
 ;; BrowserEnv
 
-(defn compile-client-js [opts]
-  (let [copts {:optimizations (:optimizations opts)
-               :output-dir (:working-dir opts)}]
-    ;; we're inside the REPL process where cljs.env/*compiler* is already
-    ;; established, need to construct a new one to avoid mutating the one
-    ;; the REPL uses
-    (cljsc/build
-      '[(ns clojure.browser.repl.client
-          (:require [goog.events :as event]
-                    [clojure.browser.repl :as repl]))
-        (defn start [url]
-          (event/listen js/window
-            "load"
-            (fn []
-              (repl/start-evaluator url))))]
-      copts (env/default-compiler-env copts))))
+(def lock (Object.))
 
-(defn create-client-js-file [opts file-path]
-  (let [file (io/file file-path)]
-    (when (not (.exists file))
-      (spit file (compile-client-js opts)))
-    file))
+(defn- waiting-to-connect-message [url]
+  (print-str "Waiting for browser to connect to" url "..."))
 
-(defn setup [{:keys [working-dir] :as repl-env} opts]
-  (binding [browser-state (:browser-state repl-env)
-            ordering (:ordering repl-env)
-            es (:es repl-env)
-            server/state (:server-state repl-env)]
-    (repl/err-out (println "Compiling client js ..."))
-    (swap! browser-state
-      (fn [old]
-        (assoc old :client-js
-          (create-client-js-file
-            repl-env (io/file working-dir "client.js")))))
-    opts
-    (repl/err-out
-      (println "Serving HTTP on" (:host repl-env) "port" (:port repl-env))
-      (println "Listening for browser REPL connect ..."))
-    (server/start repl-env)))
+(defn- maybe-browse-url [base-url]
+  (try
+    (browse/browse-url (str base-url "?rel=" (System/currentTimeMillis)))
+    (catch Throwable t
+      (if-some [error-message (not-empty (.getMessage t))]
+        (println "Failed to launch a browser:\n" error-message "\n")
+        (println "Could not launch a browser.\n"))
+      (println "You can instead launch a non-browser REPL (Node or Nashorn).\n")
+      (println "You can disable automatic browser launch with this REPL option")
+      (println "  :launch-browser false")
+      (println "and you can specify the listen IP address with this REPL option")
+      (println "  :host \"127.0.0.1\"\n")
+      (println (waiting-to-connect-message base-url)))))
+
+(defn setup [{:keys [working-dir launch-browser server-state] :as repl-env} {:keys [output-dir] :as opts}]
+  (locking lock
+    (when-not (:socket @server-state)
+      (binding [browser-state (:browser-state repl-env)
+                ordering (:ordering repl-env)
+                es (:es repl-env)
+                server/state (:server-state repl-env)]
+        (swap! browser-state
+          (fn [old]
+            (assoc old :client-js
+              (cljsc/create-client-js-file
+                {:optimizations :simple
+                 :output-dir working-dir}
+                (io/file working-dir "brepl_client.js"))
+              :closure-defines (:closure-defines opts))))
+        ;; TODO: this could be cleaner if compiling forms resulted in a
+        ;; :output-to file with the result of compiling those forms - David
+        (when (and output-dir (not (.exists (io/file output-dir "clojure" "browser" "repl" "preload.js"))))
+          (let [target (io/file output-dir "brepl_deps.js")]
+            (util/mkdirs target)
+            (spit target
+              (build/build
+                '[(require '[clojure.browser.repl.preload])]
+                (merge (select-keys opts cljsc/known-opts)
+                  {:opts-cache "brepl_opts.edn"})))))
+        (server/start repl-env)
+        (let [base-url (str "http://" (:host repl-env) ":" (:port repl-env))]
+          (if launch-browser
+            (maybe-browse-url base-url)
+            (println (waiting-to-connect-message base-url)))))))
+  (swap! server-state update :listeners inc))
 
 (defrecord BrowserEnv []
   repl/IJavaScriptEnv
@@ -269,13 +356,27 @@
   (-load [this provides url]
     (load-javascript this provides url))
   (-tear-down [this]
-    (binding [server/state (:server-state this)]
-      (server/stop))
-    (.shutdown (:es this)))
+    (let [server-state (:server-state this)]
+      (when (zero? (:listeners (swap! server-state update :listeners dec)))
+        (binding [server/state server-state] (server/stop))
+        (when-not (.isShutdown (:es this))
+          (.shutdownNow (:es this))))))
   repl/IReplEnvOptions
   (-repl-options [this]
-    {:repl-requires
-     '[[clojure.browser.repl]]})
+    {:browser-repl true
+     :repl-requires
+     '[[clojure.browser.repl] [clojure.browser.repl.preload]]
+     :cljs.cli/commands
+     {:groups {::repl {:desc "browser REPL options"}}
+      :init
+      {["-H" "--host"]
+       {:group ::repl :fn #(assoc-in %1 [:repl-env-options :host] %2)
+        :arg "address"
+        :doc "Address to bind"}
+       ["-p" "--port"]
+       {:group ::repl :fn #(assoc-in %1 [:repl-env-options :port] (Integer/parseInt %2))
+        :arg "number"
+        :doc "Port to bind"}}}})
   repl/IParseStacktrace
   (-parse-stacktrace [this st err opts]
     (st/parse-stacktrace this st err opts))
@@ -290,26 +391,24 @@
               :stacktrace (.-stack ~e)}))))))
 
 (defn repl-env*
-  [{:keys [output-dir] :as opts}]
+  [{:keys [output-dir host port] :or {host "localhost" port 9000} :as opts}]
   (merge (BrowserEnv.)
-    {:host "localhost"
-     :port 9000
+    {:host host
+     :port port
+     :launch-browser true
      :working-dir (->> [".repl" (util/clojurescript-version)]
                        (remove empty?) (string/join "-"))
-     :serve-static true
      :static-dir (cond-> ["." "out/"] output-dir (conj output-dir))
      :preloaded-libs []
-     :optimizations :simple
      :src "src/"
      :browser-state (atom {:return-value-fn nil
-                          :client-js nil})
+                           :client-js nil})
      :ordering (agent {:expecting nil :fns {}})
      :es (Executors/newFixedThreadPool 16)
      :server-state
      (atom
        {:socket nil
-        :connection nil
-        :promised-conn nil})}
+        :listeners 0})}
     opts))
 
 (defn repl-env
@@ -318,23 +417,21 @@
   Options:
 
   port:           The port on which the REPL server will run. Defaults to 9000.
+  launch-browser: A Boolean indicating whether a browser should be automatically
+                  launched connecting back to the terminal REPL. Defaults to true.
   working-dir:    The directory where the compiled REPL client JavaScript will
                   be stored. Defaults to \".repl\" with a ClojureScript version
                   suffix, eg. \".repl-0.0-2138\".
-  serve-static:   Should the REPL server attempt to serve static content?
-                  Defaults to true.
   static-dir:     List of directories to search for static content. Defaults to
                   [\".\" \"out/\"].
-  optimizations:  The level of optimization to use when compiling the client
-                  end of the REPL. Defaults to :simple.
   src:            The source directory containing user-defined cljs files. Used to
                   support reflection. Defaults to \"src/\".
   "
   [& {:as opts}]
   (repl-env* opts))
 
-(defn -main []
-  (repl/repl (repl-env)))
+(defn -main [& args]
+  (apply cli/main repl-env args))
 
 (comment
 

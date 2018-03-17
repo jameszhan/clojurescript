@@ -7,7 +7,9 @@
 ;; You must not remove this notice, or any other, from this software.
 
 (ns cljs.test-util
-  (:require [clojure.java.io :as io]))
+  (:require [clojure.java.io :as io]
+            [clojure.string :as string])
+  (:import [java.io File]))
 
 (defn delete-out-files
   "Processed files are only copied/written if input has changed. In test case it
@@ -24,6 +26,14 @@
     (while (.exists nm)
       (doseq [f (file-seq nm)]
         (.delete f)))))
+
+(defn document-write?
+  "Returns true if the string `s` contains a document.write statement to
+  load the namespace `ns`, otherwise false."
+  [s ns]
+  (->> (format "document.write('<script>goog.require(\"%s\");</script>');" ns)
+       (string/index-of s)
+       (some?)))
 
 (defn project-with-modules
   "Returns the build config for a project that uses Google Closure modules."
@@ -49,3 +59,6 @@
   "Returns the temporary directory of the system."
   []
   (System/getProperty "java.io.tmpdir"))
+
+(defn platform-path [path]
+  (.replace path \/ (.charAt (str File/separator) 0)))

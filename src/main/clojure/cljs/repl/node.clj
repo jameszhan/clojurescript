@@ -13,6 +13,7 @@
             [cljs.analyzer :as ana]
             [cljs.compiler :as comp]
             [cljs.repl :as repl]
+            [cljs.cli :as cli]
             [cljs.closure :as closure]
             [clojure.data.json :as json])
   (:import java.net.Socket
@@ -99,7 +100,7 @@
 (defn- build-process
   [opts repl-env input-src]
   (let [xs   (cond-> [(get opts :node-command "node")]
-               (:debug-port repl-env) (conj (str "--debug=" (:debug-port repl-env))))
+               (:debug-port repl-env) (conj (str "--inspect=" (:debug-port repl-env))))
         proc (-> (ProcessBuilder. (into-array xs)) (.redirectInput input-src))]
     (when-let [path-fs (:path repl-env)]
       (.put (.environment proc)
@@ -144,8 +145,9 @@
       ;; for bootstrap to load, use new closure/compile as it can handle
       ;; resources in JARs
       (let [core-js (closure/compile core
-                      (assoc (dissoc opts :output-dir)
-                        :output-file (closure/src-file->target-file core)))
+                      (assoc opts :output-file
+                        (closure/src-file->target-file
+                          core (dissoc opts :output-dir))))
             deps    (closure/add-dependencies opts core-js)]
         ;; output unoptimized code and the deps file
         ;; for all compiled namespaces
@@ -156,7 +158,7 @@
       ;; bootstrap, replace __dirname as __dirname won't be set
       ;; properly due to how we are running it - David
       (node-eval repl-env
-        (-> (slurp (io/resource "cljs/bootstrap_node.js"))
+        (-> (slurp (io/resource "cljs/bootstrap_nodejs.js"))
           (string/replace "path.resolve(__dirname, '..', 'base.js')"
             (platform-path (conj rewrite-path "bootstrap" ".." "base.js")))
           (string/replace
@@ -194,7 +196,10 @@
                (when (or (not (contains? *loaded-libs* name)) reload)
                  (set! *loaded-libs* (conj (or *loaded-libs* #{}) name))
                  (js/CLOSURE_IMPORT_SCRIPT
-                   (unchecked-get (.. js/goog -dependencies_ -nameToPath) name))))))))))
+                   (unchecked-get (.. js/goog -dependencies_ -nameToPath) name)))))))
+      (node-eval repl-env
+        (str "goog.global.CLOSURE_UNCOMPILED_DEFINES = "
+          (json/write-str (:closure-defines opts)) ";")))))
 
 (defrecord NodeEnv [host port path socket proc]
   repl/IReplEnvOptions
@@ -212,8 +217,11 @@
   (-load [this provides url]
     (load-javascript this provides url))
   (-tear-down [this]
-    (.destroy ^Process @proc)
-    (close-socket @socket)))
+    (let [{:keys [out]} @socket]
+      (write out ":cljs/quit")
+      (while (alive? @proc)
+        (Thread/sleep 50))
+      (close-socket @socket))))
 
 (defn repl-env* [options]
   (let [{:keys [host port path debug-port]}
@@ -230,5 +238,5 @@
   [& {:as options}]
   (repl-env* options))
 
-(defn -main []
-  (repl/repl (repl-env)))
+(defn -main [& args]
+  (apply cli/main repl-env args))

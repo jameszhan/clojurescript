@@ -10,10 +10,12 @@
   (:refer-clojure :exclude [load-file])
   (:require [clojure.string :as string]
             [clojure.java.io :as io]
+            [clojure.data.json :as json]
             [cljs.compiler :as comp]
             [cljs.closure :as closure]
             [cljs.analyzer :as ana]
             [cljs.repl :as repl]
+            [cljs.cli :as cli]
             [cljs.util :as util]
             [cljs.stacktrace :as st])
   (:import [java.io File Reader]
@@ -107,9 +109,9 @@
         core    (io/resource "cljs/core.cljs")
         base-js (io/resource "goog/base.js")
         core-js (closure/compile core
-                  (assoc opts
-                    :output-file
-                    (closure/src-file->target-file core)))
+                  (assoc opts :output-file
+                    (closure/src-file->target-file
+                      core (dissoc opts :output-dir))))
         deps    (closure/add-dependencies opts core-js)
         output-dir (util/output-directory opts)
         repl-deps (io/file output-dir "rhino_repl_deps.js")]
@@ -153,7 +155,12 @@
              (when (or (not (contains? *loaded-libs* name)) reload)
                (set! *loaded-libs* (conj (or *loaded-libs* #{}) name))
                (js/CLOSURE_IMPORT_SCRIPT
-                 (goog.object/get (.. js/goog -dependencies_ -nameToPath) name)))))))))
+                 (goog.object/get (.. js/goog -dependencies_ -nameToPath) name)))))))
+
+    ;; set closure-defines
+    (rhino-eval repl-env "CLOSURE_UNCOMPILED_DEFINES" 1
+      (str "goog.global.CLOSURE_UNCOMPILED_DEFINES = "
+        (json/write-str (:closure-defines opts)) ";"))))
 
 ;; Catching errors and rethrowing in Rhino swallows the original trace
 ;; https://groups.google.com/d/msg/mozilla.dev.tech.js-engine.rhino/inMyVKhPq6M/cY39hX20_z8J
@@ -220,8 +227,8 @@
   [& {:as opts}]
   (repl-env* opts))
 
-(defn -main []
-  (repl/repl (repl-env)))
+(defn -main [& args]
+  (apply cli/main repl-env args))
 
 (comment
 

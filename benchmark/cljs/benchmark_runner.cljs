@@ -1,7 +1,8 @@
 (ns cljs.benchmark-runner
   (:refer-clojure :exclude [println])
   (:require [cljs.reader :as reader]
-            [clojure.core.reducers :as r]))
+            [clojure.core.reducers :as r]
+            [clojure.string :as string]))
 
 (def println print)
 
@@ -23,6 +24,17 @@
 (simple-benchmark [coll (seq arr)] (ci-reduce coll sum 0) 1)
 (simple-benchmark [coll arr] (array-reduce coll + 0) 1)
 (simple-benchmark [coll arr] (array-reduce coll sum 0) 1)
+
+(println ";; areduce")
+(def x (atom 0))
+(simple-benchmark [arr (to-array (range 1000000))] (reset! x (areduce arr i ret 0 (+ ret (aget arr i)))) 1)
+
+(println ";; amap")
+(simple-benchmark [arr (to-array (range 1000000))] (amap arr i ret (* 10 (aget arr i))) 1)
+
+(println ";; js-keys")
+(simple-benchmark [obj (js-obj "a" 1 "b" 2) f js-keys] (f obj) 400000)
+(simple-benchmark [obj (js-obj "a" 1 "b" 2 "c" 3 "d" 4 "e" 5 "f" 6) f js-keys] (f obj) 400000)
 
 (println ";;; instance?")
 ;; WARNING: will get compiled away under advanced
@@ -396,4 +408,44 @@
 (simple-benchmark [] (str "1") 1000000)
 (simple-benchmark [] (str "1" "2") 1000000)
 (simple-benchmark [] (str "1" "2" "3") 1000000)
+
+(println "\n")
+(println ";;; clojure.string")
+(simple-benchmark [s "a" f clojure.string/capitalize] (f s) 1000000)
+(simple-benchmark [s "aBcDeF" f clojure.string/capitalize] (f s) 1000000)
+
+(println ";; printing of numbers and handling of ##Nan, ##Inf, ##-Inf")
+(simple-benchmark [x true] (pr-str x) 1000000)
+(simple-benchmark [x 10] (pr-str x) 1000000)
+(simple-benchmark [x js/NaN] (pr-str x) 1000000)
+(simple-benchmark [x js/Infinity] (pr-str x) 1000000)
+(simple-benchmark [x js/-Infinity] (pr-str x) 1000000)
+(simple-benchmark [x (js-obj)] (pr-str x) 1000000)
+
+(println "\n")
+(println ";; cycle")
+(simple-benchmark [] (doall (take 1000 (cycle [1 2 3]))) 1000)
+(simple-benchmark [] (into [] (take 1000) (cycle [1 2 3])) 1000)
+(simple-benchmark [] (reduce + (take 64 (cycle [1 2 3]))) 10000)
+(simple-benchmark [] (transduce (take 64) + (cycle [1 2 3])) 10000)
+
+(println "\n")
+(println ";; repeat")
+(simple-benchmark [] (doall (take 1000 (repeat 1))) 1000)
+(simple-benchmark [] (into [] (take 1000) (repeat 1)) 1000)
+(simple-benchmark [] (doall (repeat 1000 1)) 1000)
+(simple-benchmark [] (into [] (repeat 1000 1)) 1000)
+(simple-benchmark [] (reduce + 0 (repeat 1000 1)) 1000)
+(simple-benchmark [] (into [] (take 1000) (repeat 1)) 1000)
+(simple-benchmark [] (reduce + (take 64 (repeat 1))) 10000)
+(simple-benchmark [] (transduce (take 64) + (repeat 1)) 10000)
+(simple-benchmark [] (reduce + (take 64 (repeat 48 1))) 10000)
+(simple-benchmark [] (transduce (take 64) + (repeat 48 1)) 10000)
+
+(println "\n")
+(println ";; iterate")
+(simple-benchmark [] (doall (take 1000 (iterate inc 0))) 1000)
+(simple-benchmark [] (into [] (take 1000) (iterate inc 0)) 1000)
+(simple-benchmark [] (reduce + (take 64 (iterate inc 0))) 10000)
+(simple-benchmark [] (transduce (take 64) + (iterate inc 0)) 10000)
 (println)

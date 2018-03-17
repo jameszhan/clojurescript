@@ -18,6 +18,7 @@
   (:require [goog.dom :as gdom]
             [goog.object :as gobj]
             [goog.array :as garray]
+            [goog.json :as json]
             [goog.userAgent.product :as product]
             [clojure.browser.net :as net]
             [clojure.browser.event :as event]
@@ -27,7 +28,11 @@
             ;; with clojure.browser.repl:
             [cljs.repl]))
 
+(goog-define HOST "localhost")
+(goog-define PORT 9000)
+
 (def xpc-connection (atom nil))
+(def parent-connected? (atom false))
 (def print-queue (array))
 
 (defn flush-print-queue! [conn]
@@ -37,12 +42,12 @@
 
 (defn repl-print [data]
   (.push print-queue (pr-str data))
-  (when-let [conn @xpc-connection]
-    (flush-print-queue! conn)))
+  (when @parent-connected?
+    (flush-print-queue! @xpc-connection)))
 
-(set! *print-fn* repl-print)
-(set! *print-err-fn* repl-print)
 (set! *print-newline* true)
+(set-print-fn! repl-print)
+(set-print-err-fn! repl-print)
 
 (defn get-ua-product []
   (cond
@@ -94,7 +99,31 @@
   "Start the REPL server connection."
   [url]
   (if-let [repl-connection (net/xpc-connection)]
-    (let [connection (net/xhr-connection)]
+    (let [connection (net/xhr-connection)
+          repl-connected? (atom false)
+          try-handshake (fn try-handshake []
+                          (when-not @repl-connected?
+                            (net/transmit repl-connection
+                                          :start-handshake
+                                          nil)
+                            ;; In case we miss, try again. Parent will only
+                            ;; ack once.
+                            (js/setTimeout try-handshake
+                                           10)))]
+      (net/connect repl-connection
+                   try-handshake)
+
+      (net/register-service repl-connection
+        :ack-handshake
+        (fn [_]
+          (when-not @repl-connected?
+            (reset! repl-connected? true)
+            ;; Now that we're connected to the parent, we can start talking to
+            ;; the server.
+            (send-result connection
+                         url
+                         (wrap-message :ready "ready")))))
+
       (event/listen connection
         :success
         (fn [e]
@@ -112,12 +141,7 @@
       (net/register-service repl-connection
         :print
         (fn [data]
-          (send-print url (wrap-message :print data))))
-
-      (net/connect repl-connection
-        (constantly nil))
-
-      (js/setTimeout #(send-result connection url (wrap-message :ready "ready")) 50))
+          (send-print url (wrap-message :print data)))))
     (js/alert "No 'xpc' param provided to child iframe.")))
 
 (def load-queue nil)
@@ -186,17 +210,31 @@
   connection is made, the REPL will evaluate forms in the context of
   the document that called this function."
   [repl-server-url]
-  (let [repl-connection
+  (let [connected? (atom false)
+        repl-connection
         (net/xpc-connection
           {:peer_uri repl-server-url})]
     (swap! xpc-connection (constantly repl-connection))
     (net/register-service repl-connection
+      :start-handshake
+      (fn [_]
+        ;; Child will keep retrying, but we only want
+        ;; to ack once.
+        (when-not @connected?
+          (reset! connected? true)
+          (reset! parent-connected? true)
+          (net/transmit repl-connection
+                        :ack-handshake
+                        nil)
+          (flush-print-queue! repl-connection))))
+    (net/register-service repl-connection
       :evaluate-javascript
-      (fn [js]
-        (net/transmit
-          repl-connection
-          :send-result
-          (evaluate-javascript repl-connection js))))
+      (fn [json]
+        (let [obj (json/parse json)]
+          (net/transmit
+            repl-connection
+            :send-result
+            (evaluate-javascript repl-connection (gobj/get obj "form"))))))
     (net/connect repl-connection
       (constantly nil)
       (fn [iframe]

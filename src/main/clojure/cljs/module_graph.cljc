@@ -26,7 +26,7 @@
                       (filter
                         (fn [source]
                           (when (some #(.startsWith ^String % matcher)
-                                  (map (comp str munge) (:provides source)))
+                                  (map (comp str comp/munge) (:provides source)))
                             source)))
                       sources)]
         (when-not (empty? matches)
@@ -36,7 +36,7 @@
                            (let [matcher
                                  (into #{}
                                    [(name entry) (name (comp/munge entry))])]
-                             (when (some matcher (map (comp str munge) (:provides source)))
+                             (when (some matcher (map (comp str comp/munge) (:provides source)))
                                source)))
                          sources)]
         #{input}))))
@@ -51,7 +51,7 @@
     (fn [ret module-name module]
       (assoc ret module-name
                  (update module :entries
-                   (fn [es] (into #{} (map (comp str munge)) es)))))
+                   (fn [es] (into #{} (map (comp str comp/munge)) es)))))
     {} modules))
 
 (defn add-cljs-base
@@ -93,6 +93,11 @@
         (assoc ret module-name module')))
     {} modules))
 
+(defn normalize-input [input]
+  (-> input
+    (update :provides #(into [] (map (comp str comp/munge)) %))
+    (update :requires #(into [] (map (comp str comp/munge)) %))))
+
 (defn index-inputs
   "Index compiler inputs by :provides. If an input has multiple entries
   in :provides will result in multiple entries in the map. The keys will be munged
@@ -100,8 +105,42 @@
   [inputs]
   (reduce
     (fn [ret {:keys [provides] :as input}]
-      (into ret (map #(vector (-> % munge str) input)) provides))
+      (into ret
+        (map
+          (fn [provide]
+            (vector
+              (-> provide comp/munge str)
+              (-> input normalize-input))))
+        provides))
     {} inputs))
+
+(defn validate-inputs*
+  [indexed path seen validated]
+  (let [ns (peek path)
+        {:keys [requires]} (get indexed ns)]
+    (doseq [ns' requires]
+      (if (contains? seen ns')
+        (throw
+          (ex-info
+            (str "Circular dependency detected "
+              (apply str (interpose " -> " (conj path ns'))))
+            {:cljs.closure/error :invalid-inputs}))
+        (when-not (contains? @validated ns)
+          (validate-inputs* indexed (conj path ns') (conj seen ns') validated))))
+    (swap! validated conj ns)))
+
+(defn validate-inputs
+  "Throws on the presence of circular dependencies"
+  ([inputs]
+    (validate-inputs inputs [] #{}))
+  ([inputs path seen]
+   (let [indexed   (index-inputs inputs)
+         validated (atom #{})]
+     (binding []
+       (doseq [{:keys [provides]} (map normalize-input inputs)]
+         (let [ns (first provides)]
+           (validate-inputs* indexed (conj path ns) (conj seen ns) validated)
+           (swap! validated conj ns)))))))
 
 (defn ^:dynamic deps-for
   "Return all dependencies for x in a graph using deps-key."
@@ -113,7 +152,7 @@
 (defn deps-for-entry
   "Return all dependencies for an entry using a compiler inputs index."
   [entry indexed-inputs]
-  (map #(-> % munge str) (deps-for entry indexed-inputs :requires)))
+  (map #(-> % comp/munge str) (deps-for entry indexed-inputs :requires)))
 
 (defn deps-for-module
   "Return all dependencies of a module using compiler :modules."
@@ -191,7 +230,7 @@
                    (into {} (map assign1) d->ms)
                    (into {} (map assign1) e->ms))
         orphans  (zipmap
-                   (map (comp str munge first :provides)
+                   (map (comp str comp/munge first :provides)
                      (-> (reduce-kv (fn [m k _] (dissoc m k)) index assigned)
                        vals set))
                    (repeat :cljs-base))]
@@ -205,7 +244,7 @@
                    (reduce
                      (fn [[ret n] {:keys [provides]}]
                        [(merge ret
-                          (zipmap (map (comp str munge) provides) (repeat n)))
+                          (zipmap (map (comp str comp/munge) provides) (repeat n)))
                         (inc n)])
                      [{} 0] inputs))
         modules' (-> modules normalize add-cljs-base add-cljs-base-dep)
@@ -292,7 +331,9 @@
             (cond->> rel-path
               asset-path (str asset-path)))
           (get-rel-path* [output-dir file]
-            (string/replace (.. (io/file file) getAbsoluteFile getPath) output-dir ""))]
+            (-> (.. (io/file file) getAbsoluteFile getPath)
+                (string/replace output-dir "")
+                (string/replace #"[\\/]" "/")))]
     (let [get-rel-path (partial get-rel-path*
                          (.. (io/file output-dir)
                            getAbsoluteFile getPath))]
@@ -338,7 +379,7 @@
   "Given an entry find the module it belongs to."
   [entry modules]
   (let [modules' (normalize modules)
-        entry'   (str (munge entry))]
+        entry'   (str (comp/munge entry))]
     (->> modules'
       (some
         (fn [[module-name {:keys [entries]} :as me]]

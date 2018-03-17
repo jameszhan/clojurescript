@@ -132,7 +132,7 @@
    (closure/source-for-namespace ns compiler-env)))
 
 (defn add-dependencies
-  "Given one or more IJavaScript objects in dependency order, produce
+  "DEPRECATED: Given one or more IJavaScript objects in dependency order, produce
   a new sequence of IJavaScript objects which includes the input list
   plus all dependencies in dependency order."
   [opts & ijss]
@@ -275,10 +275,14 @@
 (defn node-inputs
   "EXPERIMENTAL: return the foreign libs entries as computed by running
    the module-deps package on the supplied JavaScript entry points. Assumes
-   that the `@cljs-oss/module-deps` and `konan` NPM packages are either
-   locally or globally installed."
-  [entries]
-  (closure/node-inputs entries))
+   that the `@cljs-oss/module-deps` NPM package is either locally or globally
+   installed."
+  ([entries]
+   (node-inputs entries
+     (when-not (nil? env/*compiler*)
+       (:options @env/*compiler*))))
+  ([entries opts]
+   (closure/node-inputs entries opts)))
 
 (comment
   (node-inputs

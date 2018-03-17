@@ -12,6 +12,7 @@
             [cljs.js :as cljs]
             [cljs.analyzer :as ana]
             [clojure.string :as string]
+            [cljs.stacktrace :as st]
             [cljs.nodejs :as nodejs]))
 
 (set! (.-user js/cljs) #js {})
@@ -220,7 +221,7 @@
 
 (deftest test-eval-str
   (async done
-    (let [l (latch 8 done)]
+    (let [l (latch 9 done)]
       (cljs/eval-str st "(+ 1 1)" nil
         {:eval node-eval}
         (fn [{:keys [error value]}]
@@ -291,91 +292,102 @@
           (inc! l))))))
 
 (deftest test-disable-analyze-deps
-  (cljs/analyze-str st
-    "(ns analyze-deps-as.core (:require [analyze-me.core :refer [abc]]))"
-    nil
-    {:context      :expr
-     :eval         cljs.js/js-eval
-     :analyze-deps false
-     :load         (fn [_ cb]
-                     (cb {:lang   :clj
-                          :source "(ns analyze-me.core)"}))}
-    (fn [{:keys [error]}]
-      (is (nil? error))))
-
-  (cljs/eval st
-    '(ns analyze-deps-e.core (:require [analyze-me.core :refer [abc]]))
-    {:context      :expr
-     :eval         cljs.js/js-eval
-     :analyze-deps false
-     :load         (fn [_ cb]
-                     (cb {:lang   :clj
-                          :source "(ns analyze-me.core)"}))}
-    (fn [{:keys [error]}]
-      (is (nil? error))))
-  (cljs/compile-str st
-    "(ns analyze-deps-c.core (:require [analyze-me.core :refer [abc]]))"
-    nil
-    {:context      :expr
-     :eval         cljs.js/js-eval
-     :analyze-deps false
-     :load         (fn [_ cb]
-                     (cb {:lang   :clj
-                          :source "(ns analyze-me.core)"}))}
-    (fn [{:keys [error]}]
-      (is (nil? error))))
-  (cljs/eval-str st
-    "(ns analyze-deps-es.core (:require [analyze-me.core :refer [abc]]))"
-    nil
-    {:context      :expr
-     :eval         cljs.js/js-eval
-     :analyze-deps false
-     :load         (fn [_ cb]
-                     (cb {:lang   :clj
-                          :source "(ns analyze-me.core)"}))}
-    (fn [{:keys [error]}]
-      (is (nil? error)))))
+  (async done
+    (let [l (latch 4 done)]
+      (cljs/analyze-str st
+        "(ns analyze-deps-as.core (:require [analyze-me.core :refer [abc]]))"
+        nil
+        {:context      :expr
+         :eval         cljs.js/js-eval
+         :analyze-deps false
+         :load         (fn [_ cb]
+                         (cb {:lang   :clj
+                              :source "(ns analyze-me.core)"}))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (inc! l)))
+      (cljs/eval st
+        '(ns analyze-deps-e.core (:require [analyze-me.core :refer [abc]]))
+        {:context      :expr
+         :eval         cljs.js/js-eval
+         :analyze-deps false
+         :load         (fn [_ cb]
+                         (cb {:lang   :clj
+                              :source "(ns analyze-me.core)"}))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (inc! l)))
+      (cljs/compile-str st
+        "(ns analyze-deps-c.core (:require [analyze-me.core :refer [abc]]))"
+        nil
+        {:context      :expr
+         :eval         cljs.js/js-eval
+         :analyze-deps false
+         :load         (fn [_ cb]
+                         (cb {:lang   :clj
+                              :source "(ns analyze-me.core)"}))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (inc! l)))
+      (cljs/eval-str st
+        "(ns analyze-deps-es.core (:require [analyze-me.core :refer [abc]]))"
+        nil
+        {:context      :expr
+         :eval         cljs.js/js-eval
+         :analyze-deps false
+         :load         (fn [_ cb]
+                         (cb {:lang   :clj
+                              :source "(ns analyze-me.core)"}))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (inc! l))))))
 
 (deftest test-disable-load-macros
-  (cljs/analyze-str st
-    "(ns load-macros-as.core (:require-macros [load-me.core]))"
-    nil
-    {:context     :expr
-     :eval        cljs.js/js-eval
-     :load-macros false
-     :load        (fn [_ _]
-                    (throw (ex-info "unexpected" {})))}
-    (fn [{:keys [error]}]
-      (is (nil? error))))
-  (cljs/eval st
-    '(ns load-macros-e.core (:require-macros [load-me.core]))
-    {:context     :expr
-     :eval        cljs.js/js-eval
-     :load-macros false
-     :load        (fn [_ _]
-                    (throw (ex-info "unexpected" {})))}
-    (fn [{:keys [error]}]
-      (is (nil? error))))
-  (cljs/compile-str st
-    "(ns load-macros-c.core (:require-macros [load-me.core]))"
-    nil
-    {:context     :expr
-     :eval        cljs.js/js-eval
-     :load-macros false
-     :load        (fn [_ _]
-                    (throw (ex-info "unexpected" {})))}
-    (fn [{:keys [error]}]
-      (is (nil? error))))
-  (cljs/eval-str st
-    "(ns load-macros-es.core (:require-macros [load-me.core]))"
-    nil
-    {:context     :expr
-     :eval        cljs.js/js-eval
-     :load-macros false
-     :load        (fn [_ _]
-                    (throw (ex-info "unexpected" {})))}
-    (fn [{:keys [error]}]
-      (is (nil? error)))))
+  (async done
+    (let [l (latch 4 done)]
+      (cljs/analyze-str st
+        "(ns load-macros-as.core (:require-macros [load-me.core]))"
+        nil
+        {:context     :expr
+         :eval        cljs.js/js-eval
+         :load-macros false
+         :load        (fn [_ _]
+                        (throw (ex-info "unexpected" {})))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (inc! l)))
+      (cljs/eval st
+        '(ns load-macros-e.core (:require-macros [load-me.core]))
+        {:context     :expr
+         :eval        cljs.js/js-eval
+         :load-macros false
+         :load        (fn [_ _]
+                        (throw (ex-info "unexpected" {})))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (inc! l)))
+      (cljs/compile-str st
+        "(ns load-macros-c.core (:require-macros [load-me.core]))"
+        nil
+        {:context     :expr
+         :eval        cljs.js/js-eval
+         :load-macros false
+         :load        (fn [_ _]
+                        (throw (ex-info "unexpected" {})))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (inc! l)))
+      (cljs/eval-str st
+        "(ns load-macros-es.core (:require-macros [load-me.core]))"
+        nil
+        {:context     :expr
+         :eval        cljs.js/js-eval
+         :load-macros false
+         :load        (fn [_ _]
+                        (throw (ex-info "unexpected" {})))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (inc! l))))))
 
 (deftest test-load-and-invoke-macros
   (async done
@@ -643,136 +655,160 @@
           (inc! l))))))
 
 (deftest test-CLJS-1330
-  (cljs/eval-str st
-    "(.toString 1)"
-    nil
-    {:eval node-eval}
-    (fn [{:keys [error value]}]
-      (is (= "1" value)))))
+  (async done
+    (cljs/eval-str st
+      "(.toString 1)"
+      nil
+      {:eval node-eval}
+      (fn [{:keys [error value]}]
+        (is (= "1" value))
+        (done)))))
 
 (deftest test-CLJS-1551
-  (cljs/eval-str st
-    "(if-let [x true y true] 3)"
-    nil
-    {:eval node-eval}
-    (fn [{:keys [error value]}]
-      (is (nil? value))
-      (is (= "if-let requires exactly 2 forms in binding vector at line 1 " (ex-message (ex-cause error))))))
-  (cljs/eval-str st
-    "(if-let [x true] 1 2 3)"
-    nil
-    {:eval node-eval}
-    (fn [{:keys [error value]}]
-      (is (nil? value))
-      (is (= "if-let requires 1 or 2 forms after binding vector at line 1 " (ex-message (ex-cause error))))))
-  (cljs/eval-str st
-    "(if-let '(x true) 1)"
-    nil
-    {:eval node-eval}
-    (fn [{:keys [error value]}]
-      (is (nil? value))
-      (is (= "if-let requires a vector for its binding at line 1 " (ex-message (ex-cause error)))))))
+  (async done
+    (let [l (latch 3 done)]
+      (cljs/eval-str st
+        "(if-let [x true y true] 3)"
+        nil
+        {:eval node-eval}
+        (fn [{:keys [error value]}]
+          (is (nil? value))
+          (is (= "if-let requires exactly 2 forms in binding vector at line 1 " (ex-message (ex-cause error))))
+          (inc! l)))
+      (cljs/eval-str st
+        "(if-let [x true] 1 2 3)"
+        nil
+        {:eval node-eval}
+        (fn [{:keys [error value]}]
+          (is (nil? value))
+          (is (= "if-let requires 1 or 2 forms after binding vector at line 1 " (ex-message (ex-cause error))))
+          (inc! l)))
+      (cljs/eval-str st
+        "(if-let '(x true) 1)"
+        nil
+        {:eval node-eval}
+        (fn [{:keys [error value]}]
+          (is (nil? value))
+          (is (= "if-let requires a vector for its binding at line 1 " (ex-message (ex-cause error))))
+          (inc! l))))))
 
 (deftest test-CLJS-1573
-  (cljs/compile-str st
-    "\"90°\""
-    nil
-    {:eval    node-eval
-     :context :expr}
-    (fn [{:keys [error value]}]
-      (is (nil? error))
-      (is (= "\"90\\u00b0\"" value))))
-  (cljs/compile-str st
-    "\"Ϊ\""
-    nil
-    {:eval    node-eval
-     :context :expr}
-    (fn [{:keys [error value]}]
-      (is (nil? error))
-      (is (= "\"\\u03aa\"" value))))
-  (cljs/compile-str st
-    "\"ሴ\""
-    nil
-    {:eval    node-eval
-     :context :expr}
-    (fn [{:keys [error value]}]
-      (is (nil? error))
-      (is (= "\"\\u1234\"" value))))
-  (cljs/eval-str st
-    "\"90°\""
-    nil
-    {:eval node-eval
-     :context :expr}
-    (fn [{:keys [error value]}]
-      (is (nil? error))
-      (is (= "90°" value)))))
-
-(deftest test-CLJS-1577
-  (cljs/analyze-str st
-    "`.x"
-    nil
-    {:eval    node-eval
-     :context :expr}
-    (fn [{:keys [error value]}]
-      (is (nil? error))
-      (is (= '.x (:form value)))))
-  (cljs/compile-str st
-    "`.x"
-    nil
-    {:eval    node-eval
-     :context :expr}
-    (fn [{:keys [error value]}]
-      (is (nil? error))
-      (is (string/starts-with? value "new cljs.core.Symbol(null,\".x\",\".x\","))))
-  (cljs/eval-str st
-    "`.x"
-    nil
-    {:eval    node-eval
-     :context :expr}
-    (fn [{:keys [error value]}]
-      (is (nil? error))
-      (is (= '.x value)))))
-
-(deftest test-CLJS-1584
-  (cljs/eval-str st
-    "(condp = 1 1 2)"
-    nil
-    {:eval    node-eval
-     :context :expr}
-    (fn [{:keys [error value]}]
-      (is (nil? error))
-      (is (= 2 value)))))
-
-(deftest test-CLJS-1585
-  (cljs/eval-str st
-    "(ns alias-load.core (:require [aliased.core :as alias]))"
-    nil
-    {:ns      'cljs.user
-     :context :expr
-     :eval    cljs.js/js-eval
-     :load    (fn [_ cb]
-                (cb {:lang :clj :source "(ns aliased.core)"}))}
-    (fn [{:keys [error value]}]
-      (is (nil? error))
-      (cljs.js/eval-str st
-        "::alias/bar"
+  (async done
+    (let [l (latch 4 done)]
+      (cljs/compile-str st
+        "\"90°\""
         nil
-        {:ns      'alias-load.core
-         :context :expr
-         :eval    cljs.js/js-eval}
+        {:eval    node-eval
+         :context :expr}
         (fn [{:keys [error value]}]
           (is (nil? error))
-          (is (= :aliased.core/bar value)))))))
+          (is (= "\"90\\u00b0\"" value))
+          (inc! l)))
+      (cljs/compile-str st
+        "\"Ϊ\""
+        nil
+        {:eval    node-eval
+         :context :expr}
+        (fn [{:keys [error value]}]
+          (is (nil? error))
+          (is (= "\"\\u03aa\"" value))
+          (inc! l)))
+      (cljs/compile-str st
+        "\"ሴ\""
+        nil
+        {:eval    node-eval
+         :context :expr}
+        (fn [{:keys [error value]}]
+          (is (nil? error))
+          (is (= "\"\\u1234\"" value))
+          (inc! l)))
+      (cljs/eval-str st
+        "\"90°\""
+        nil
+        {:eval node-eval
+         :context :expr}
+        (fn [{:keys [error value]}]
+          (is (nil? error))
+          (is (= "90°" value))
+          (inc! l))))))
+
+(deftest test-CLJS-1577
+  (async done
+    (let [l (latch 3 done)]
+      (cljs/analyze-str st
+        "`.x"
+        nil
+        {:eval    node-eval
+         :context :expr}
+        (fn [{:keys [error value]}]
+          (is (nil? error))
+          (is (= '.x (:form value)))
+          (inc! l)))
+      (cljs/compile-str st
+        "`.x"
+        nil
+        {:eval    node-eval
+         :context :expr}
+        (fn [{:keys [error value]}]
+          (is (nil? error))
+          (is (string/starts-with? value "new cljs.core.Symbol(null,\".x\",\".x\","))
+          (inc! l)))
+      (cljs/eval-str st
+        "`.x"
+        nil
+        {:eval    node-eval
+         :context :expr}
+        (fn [{:keys [error value]}]
+          (is (nil? error))
+          (is (= '.x value))
+          (inc! l))))))
+
+(deftest test-CLJS-1584
+  (async done
+    (cljs/eval-str st
+      "(condp = 1 1 2)"
+      nil
+      {:eval    node-eval
+       :context :expr}
+      (fn [{:keys [error value]}]
+        (is (nil? error))
+        (is (= 2 value))
+        (done)))))
+
+(deftest test-CLJS-1585
+  (async done
+    (cljs/eval-str st
+      "(ns alias-load.core (:require [aliased.core :as alias]))"
+      nil
+      {:ns      'cljs.user
+       :context :expr
+       :eval    cljs.js/js-eval
+       :load    (fn [_ cb]
+                  (cb {:lang :clj :source "(ns aliased.core)"}))}
+      (fn [{:keys [error value]}]
+        (is (nil? error))
+        (cljs.js/eval-str st
+          "::alias/bar"
+          nil
+          {:ns      'alias-load.core
+           :context :expr
+           :eval    cljs.js/js-eval}
+          (fn [{:keys [error value]}]
+            (is (nil? error))
+            (is (= :aliased.core/bar value))
+            (done)))))))
 
 (deftest test-CLJS-1589
-  (cljs/eval-str st
-    "(case 1 nil nil :x)"
-    nil
-    {:eval    node-eval
-     :context :expr}
-    (fn [{:keys [error value]}]
-      (is (nil? error))
-      (is (= :x value)))))
+  (async done
+    (cljs/eval-str st
+      "(case 1 nil nil :x)"
+      nil
+      {:eval    node-eval
+       :context :expr}
+      (fn [{:keys [error value]}]
+        (is (nil? error))
+        (is (= :x value))
+        (done)))))
 
 (deftest test-CLJS-1612
   (async done
@@ -835,68 +871,72 @@
 
 (deftest test-cljs-1651
   (let [st (cljs/empty-state)]
-    (cljs/eval-str st
-      "(defn double [x] (* 2 x))"
-      nil
-      {:eval node-eval
-       :context :expr}
-      (fn [{:keys [value error]}]
-        (is (nil? error))
-        (cljs/eval-str st
-          "[(double 3) (apply double [3])]"
-          nil
-          {:eval node-eval
-           :context :expr}
-          (fn [{:keys [value error]}]
-            (is (= value [6 6]))))))))
+    (async done
+      (cljs/eval-str st
+        "(defn double [x] (* 2 x))"
+        nil
+        {:eval node-eval
+         :context :expr}
+        (fn [{:keys [value error]}]
+          (is (nil? error))
+          (cljs/eval-str st
+            "[(double 3) (apply double [3])]"
+            nil
+            {:eval node-eval
+             :context :expr}
+            (fn [{:keys [value error]}]
+              (is (= value [6 6]))
+              (done))))))))
 
 (deftest test-cljs-1854
   (let [st (cljs/empty-state)]
-    (cljs/eval st
-      '(require 'foo.core1854)
-      {:eval    node-eval
-       :context :expr
-       :load    (fn [_ cb] (cb {:lang :clj :source "(ns foo.core1854) (def ^:const x 1)"}))}
-      (fn [{:keys [value error]}]
-        (is (nil? error))
-        (cljs/eval st
-          'foo.core1854/x
-          {:eval node-eval
-           :context :expr}
-          (fn [{:keys [value error]}]
-            (is (nil? error))
-            (is (= value 1))))
-        (cljs/eval st
-          '(require 'foo.core1854 :reload)
-          {:eval    node-eval
-           :context :expr
-           :load    (fn [_ cb] (cb {:lang :clj :source "(ns foo.core1854) (def ^:const x 2)"}))}
-          (fn [{:keys [value error]}]
-            (is (nil? error))
-            (cljs/eval st
-              'foo.core1854/x
-              {:eval node-eval
-               :context :expr}
-              (fn [{:keys [value error]}]
-                (is (nil? error))
-                (is (= value 2))))
-            (cljs/eval st
-              '(require 'bar.core1854 :reload-all)
-              {:eval    node-eval
-               :context :expr
-               :load    (fn [{:keys [name]} cb]
-                          (case name
-                            bar.core1854 (cb {:lang :clj :source "(ns bar.core1854 (:require [foo.core1854]))"})
-                            foo.core1854 (cb {:lang :clj :source "(ns foo.core1854) (def ^:const x 3)"})))}
-              (fn [{:keys [value error]}]
-                (is (nil? error))
-                (cljs/eval st
-                  'foo.core1854/x
-                  {:eval node-eval
-                   :context :expr}
-                  (fn [{:keys [value error]}]
-                    (is (nil? error))
-                    (is (= value 3))))))))))))
+    (async done
+      (cljs/eval st
+        '(require 'foo.core1854)
+        {:eval    node-eval
+         :context :expr
+         :load    (fn [_ cb] (cb {:lang :clj :source "(ns foo.core1854) (def ^:const x 1)"}))}
+        (fn [{:keys [value error]}]
+          (is (nil? error))
+          (cljs/eval st
+            'foo.core1854/x
+            {:eval node-eval
+             :context :expr}
+            (fn [{:keys [value error]}]
+              (is (nil? error))
+              (is (= value 1))))
+          (cljs/eval st
+            '(require 'foo.core1854 :reload)
+            {:eval    node-eval
+             :context :expr
+             :load    (fn [_ cb] (cb {:lang :clj :source "(ns foo.core1854) (def ^:const x 2)"}))}
+            (fn [{:keys [value error]}]
+              (is (nil? error))
+              (cljs/eval st
+                'foo.core1854/x
+                {:eval node-eval
+                 :context :expr}
+                (fn [{:keys [value error]}]
+                  (is (nil? error))
+                  (is (= value 2))))
+              (cljs/eval st
+                '(require 'bar.core1854 :reload-all)
+                {:eval    node-eval
+                 :context :expr
+                 :load    (fn [{:keys [name]} cb]
+                            (case name
+                              bar.core1854 (cb {:lang :clj :source "(ns bar.core1854 (:require [foo.core1854]))"})
+                              foo.core1854 (cb {:lang :clj :source "(ns foo.core1854) (def ^:const x 3)"})))}
+                (fn [{:keys [value error]}]
+                  (is (nil? error))
+                  (cljs/eval st
+                    'foo.core1854/x
+                    {:eval node-eval
+                     :context :expr}
+                    (fn [{:keys [value error]}]
+                      (is (nil? error))
+                      (is (= value 3))
+                      (done))))))))))))
 
 (deftest test-cljs-1874
   (async done
@@ -1089,6 +1129,323 @@
               (fn [{:keys [error value]}]
                 (is (nil? error))
                 (is (= value 3))
+                (inc! l)))))))))
+
+(deftest test-cljs-2287
+  (async done
+    (let [st (cljs/empty-state)
+          l (latch 2 done)]
+      (cljs/eval-str
+        (atom @st)
+        "(ns foo.core (:require [path]))"
+        nil
+        {:context :expr
+         :target :nodejs
+         :def-emits-var true
+         :eval identity}
+        (fn [{{:keys [source]} :value}]
+          (is (some? (re-find #"foo\.core\.node\$module\$path = require\('path'\);\snull;" source)))
+          (inc! l)))
+      (let [calculator-load (fn [_ cb]
+                              (cb {:lang   :js
+                                   :source "global.Calculator = {
+    add: function (a, b) {
+        return a + b;
+    },
+    subtract: function (a, b) {
+        return a - b;
+    }
+};"}))]
+        (swap! st assoc :js-dependency-index {"calculator" {:global-exports '{calculator Calculator}}})
+        (cljs/eval-str
+          (atom @st)
+          "(ns foo.core (:require [calculator])) (calculator/add 1 2)"
+          nil
+          {:context :expr
+           :def-emits-var true
+           :load calculator-load
+           :eval identity}
+          (fn [{{:keys [source]} :value}]
+            (is (some? (re-find #"foo\.core\.global\$module\$calculator = goog.global.Calculator;\snull;" source)))
+            (inc! l)))))))
+
+(deftest test-cljs-2261
+  (async done
+    (let [st (cljs/empty-state)
+          l  (latch 2 done)]
+      (cljs/eval st '(ns bar.core2261a
+                       (:require [foo.core2261a :refer-macros [cake]]))
+        {:ns      'cljs.user
+         :eval    node-eval
+         :context :expr
+         :load    (fn [{:keys [macros]} cb]
+                    (if macros
+                      (cb {:lang   :clj
+                           :source "(ns foo.core2261a) (defmacro cake [] `(->X))"})
+                      (cb {:lang   :clj
+                           :source "(ns foo.core2261a) (defrecord X [])"})))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (cljs/eval-str st "(pr-str (cake))" nil
+            {:ns      'bar.core2261a
+             :eval    node-eval
+             :context :expr}
+            (fn [{:keys [error value]}]
+              (is (nil? error))
+              (is (= "#foo.core2261a.X{}" value))
+              (inc! l)))))
+      (cljs/eval st '(ns bar.core2261b
+                       (:require [foo.core2261b :refer-macros [cake]]))
+        {:ns      'cljs.user
+         :eval    node-eval
+         :context :expr
+         :load    (fn [{:keys [macros]} cb]
+                    (if macros
+                      (cb {:lang   :clj
+                           :source "(ns foo.core2261b) (defmacro cake [] `(X.))"})
+                      (cb {:lang   :clj
+                           :source "(ns foo.core2261b) (defrecord X [])"})))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (cljs/eval-str st "(pr-str (cake))" nil
+            {:ns      'bar.core2261b
+             :eval    node-eval
+             :context :expr}
+            (fn [{:keys [error value]}]
+              (is (nil? error))
+              (is (= "#foo.core2261b.X{}" value))
+              (inc! l))))))))
+
+(deftest test-cljs-2266
+  (async done
+    (let [st (cljs/empty-state)
+          l  (latch 1 done)]
+      (cljs.js/eval-str st "(require 'clojure.x)" nil
+        {:eval node-eval
+         :load (fn [{:keys [name macros]} cb]
+                 (cb (when (and (= name 'cljs.x)
+                             (not macros))
+                       {:lang   :clj
+                        :source "(ns cljs.x)"})))}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (inc! l))))))
+
+(deftest test-cljs-2303
+  (async done
+    (let [st (cljs/empty-state)
+          load (fn [{:keys [name macros]} cb]
+                 (cb (when (and (= name 'cljs.x)
+                             (not macros))
+                       {:lang   :clj
+                        :source "(ns cljs.x)"})))
+          l  (latch 1 done)]
+      (cljs.js/eval-str st "(require 'clojure.x)" nil
+        {:eval node-eval
+         :load load}
+        (fn [{:keys [error]}]
+          (is (nil? error))
+          (cljs.js/eval-str st "(require 'clojure.x)" nil
+            {:eval node-eval
+             :load load}
+            (fn [{:keys [error]}]
+              (is (nil? error))
+              (inc! l))))))))
+
+(deftest test-cljs-2354
+  (async done
+    (let [st (cljs/empty-state)
+          load (fn [{:keys [name macros]} cb]
+                 (cb (when (and (= name 'cljs.x)
+                             (not macros))
+                       {:lang   :clj
+                        :source "(ns cljs.x)"})))
+          l  (latch 1 done)]
+      (cljs.js/compile-str st "(require 'clojure.x)" nil
+        {:load load}
+        (fn [{:keys [error value] :as m}]
+          (is (nil? error))
+          (is (re-find #"goog\.require\('cljs.x'\)" value))
+          (inc! l))))))
+
+(deftest test-cljs-2356
+  (async done
+    (let [st (cljs/empty-state)
+          load (fn [{:keys [name macros]} cb]
+                 (cb (cond
+                       (= name 'circular.a)
+                       {:lang   :clj
+                        :source "(ns circular.a (:require circular.b))"}
+
+                       (= name 'circular.b)
+                       {:lang   :clj
+                        :source "(ns circular.b (:require circular.a))"})))
+          l  (latch 2 done)]
+      (binding [ana/*cljs-dep-set* (with-meta #{} {:dep-path []})]
+        (cljs.js/compile-str st "(ns circular.a (:require circular.b))" nil
+          {:load load}
+          (fn [{:keys [error value] :as m}]
+            (is (some? error))
+            (is (= "Circular dependency detected circular.a -> circular.b -> circular.a"
+                   (.-message error)))
+            (inc! l))))
+      (binding [ana/*cljs-dep-set* (with-meta #{} {:dep-path []})]
+        (cljs.js/eval-str st "(ns circular.a (:require circular.b))" nil
+          {:load load
+           :eval node-eval}
+          (fn [{:keys [error value] :as m}]
+            (is (some? error))
+            (is (= "Circular dependency detected circular.a -> circular.b -> circular.a"
+                   (.-message error)))
+            (inc! l)))))))
+
+(deftest test-self-host-self-require
+  (async done
+    (let [st (cljs/empty-state)
+          l (latch 1 done)
+          load (fn [{:keys [name macros]} cb]
+                 (cb {:lang :clj
+                      :source "(ns foo.core)"}))]
+      (binding [ana/*cljs-dep-set* (with-meta #{} {:dep-path []})]
+        (cljs.js/eval-str st "(ns foo.core)" nil
+          {:eval node-eval}
+          (fn [{:keys [error value] :as m}]
+            (is (nil? error))
+            (cljs.js/eval-str st "(require 'foo.core :reload)" nil
+              {:load load
+               :eval node-eval
+               :def-emits-var true
+               :ns 'foo.core}
+              (fn [{:keys [error value] :as m}]
+                (is (nil? error))
+                (inc! l)))))))))
+
+(deftest test-cljs-2367
+  (async done
+    (let [st (cljs/empty-state)
+          l  (latch 2 done)]
+      (cljs.js/eval st
+        '(require (quote foo-2367.core))
+        {:context       :expr
+         :def-emits-var true
+         :eval          node-eval
+         :load          (fn [_ cb]
+                          (cb {:lang   :clj
+                               :source "(ns foo-2367.core) (def b (def a 3))"}))}
+        (fn [{:keys [error value]}]
+          (is (nil? error))
+          (cljs.js/eval st
+            'foo-2367.core/b
+            {:context :expr
+             :eval    node-eval}
+            (fn [{:keys [error value]}]
+              (is (nil? error))
+              (is (= 3 value))
+              (inc! l)))))
+      (cljs.js/eval st
+        '(require-macros (quote bar-2367.core))
+        {:context       :expr
+         :def-emits-var true
+         :eval          node-eval
+         :load          (fn [_ cb]
+                          (cb {:lang   :clj
+                               :source "(ns bar-2367.core) (def b (def a 4)) (defmacro c [] b)"}))}
+        (fn [{:keys [error value]}]
+          (is (nil? error))
+          (cljs.js/eval st
+            '(bar-2367.core/c)
+            {:context :expr
+             :eval    node-eval}
+            (fn [{:keys [error value]}]
+              (is (nil? error))
+              (is (= 4 value))
+              (inc! l))))))))
+
+(deftest test-mapping-stacktrace
+  (async done
+    (let [l (latch 1 done)]
+      (testing "it should correctly map from canonical representation (smoke test)."
+        (let [st (cljs/empty-state)]
+          (cljs/eval-str st
+            "(ns cljs.user (:require foo.bar :reload))"
+            'cljs.user
+            {:source-map true
+             :ns 'cljs.user
+             :target :nodejs
+             :eval node-eval
+             :load (fn [{:keys [name]} cb]
+                     (cb (when (= name 'foo.bar)
+                           {:lang :clj
+                            :source "(ns foo.bar)\n(defn broken-first [] (ffirst 0))"
+                            :file "foo/bar.cljs"})))}
+            (fn [{:keys [ns value error file]}]
+              (let [sms (:source-maps @st)]
+                (is (= [{:function "broken-first"
+                         :file "foo/bar.cljs"
+                         :line 2
+                         :column 7}]
+                       (st/mapped-stacktrace
+                        [{:file "foo/bar.js"
+                          :function "broken-first"
+                          :line 2
+                          :column 0}]
+                        sms)))
+                (inc! l)))))))))
+
+(deftest test-mapping-stacktrace-with-underscore
+  (async done
+    (let [l (latch 1 done)]
+      (testing "it should correctly map when file names contain underscore"
+        (let [st (cljs/empty-state)]
+          (cljs/eval-str st
+            "(ns cljs.user (:require foo.with-underscore :reload))"
+            'cljs.user
+            {:source-map true
+             :ns 'cljs.user
+             :target :nodejs
+             :eval node-eval
+             :load (fn [{:keys [name]} cb]
+                     (cb (when (= name 'foo.with-underscore)
+                           {:lang :clj
+                            :source "(ns foo.with-underscore)\n(defn broken-first [] (ffirst 0))"
+                            :file "foo/with_underscore.cljs"})))}
+            (fn [{:keys [ns value error file]}]
+              (let [sms (:source-maps @st)]
+                (is (= [{:function "broken-first"
+                         :file "foo/with_underscore.cljs"
+                         :line 2
+                         :column 7}]
+                       (st/mapped-stacktrace
+                        [{:file "foo/with_underscore.js"
+                          :function "broken-first"
+                          :line 2
+                          :column 0}]
+                        sms)))
+                (inc! l)))))))))
+
+(deftest test-append-source-map-with-nil-name
+  (async done
+    (let [
+          l (latch 1 done)]
+      (testing "it should correctly use cljs-{js/Date as number} when name to cljs.js/eval-str is nil"
+        (let [st (cljs/empty-state)]
+          (cljs/eval-str st
+            "(ns cljs.user (:require foo.bar :reload))"
+            nil
+            {:source-map true
+             :ns 'cljs.user
+             :target :nodejs
+             :eval node-eval
+             :load (fn [{:keys [name]} cb]
+                     (cb (when (= name 'foo.bar)
+                           {:lang :clj
+                            :source "(ns foo.bar)"
+                            :file "foo/bar.cljs"})))}
+            (fn [{:keys [ns value error file]}]
+              (let [cljs-timestamp? #(let [[c t] (string/split % "-")]
+                                       (and (= "cljs" c) (not (js/isNaN (js/parseInt t)))))
+                    sms (:source-maps @st)]
+                (is (some cljs-timestamp? (keys sms)))
                 (inc! l)))))))))
 
 (defn -main [& args]

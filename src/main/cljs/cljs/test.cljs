@@ -373,7 +373,7 @@
     (if (> cnt 1)
       [(js/parseInt (nth parts (- cnt 2)) 10)
        (js/parseInt (nth parts (dec cnt)) 10)]
-      [NaN NaN])))
+      [##NaN ##NaN])))
 
 (defn js-filename [stack-element]
   (let [output-dir (cljs.test/cljs-output-dir)
@@ -439,7 +439,7 @@
 (defn run-block
   "Invoke all functions in fns with no arguments. A fn can optionally
   return
-  
+
   an async test - is invoked with a continuation running left fns
 
   a seq of fns tagged per block - are invoked immediately after fn"

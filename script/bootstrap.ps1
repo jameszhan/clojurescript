@@ -5,8 +5,10 @@ $shell = New-Object -com shell.application
 # Read white listed dependency version info from the /bin/sh script and store in variables
 Get-Content $root\script\bootstrap |
     Where-Object { $_ -match '^\s*(\w+)\s*=\s*\"([^\"]*)\"\s*$' } |
-    Where-Object { $matches[1] -in "CLOJURE_RELEASE", "CLOSURE_RELEASE",
-        "DJSON_RELEASE", "GCLOSURE_LIB_RELEASE", "RHINO_RELEASE", "TREADER_RELEASE" } |
+    Where-Object { $matches[1] -in "CLOJURE_RELEASE", "SPEC_ALPHA_RELEASE",
+        "CORE_SPECS_ALPHA_RELEASE", "CLOSURE_RELEASE", "DJSON_RELEASE",
+        "TRANSIT_RELEASE", "GCLOSURE_LIB_RELEASE", "RHINO_RELEASE",
+        "TREADER_RELEASE", "TEST_CHECK_RELEASE" } |
     Foreach-Object { New-Variable $matches[1] $matches[2] -Scope private }
 
 function Get-WebResource($url, $dstPath) {
@@ -88,17 +90,28 @@ Make-Dir $root\closure\compiler
 
 Write-Host "Fetching Clojure..."
 Get-WebResource  `
-    https://repo1.maven.org/maven2/org/clojure/clojure/$CLOJURE_RELEASE/clojure-$CLOJURE_RELEASE.zip `
-    $root\clojure-$CLOJURE_RELEASE.zip
-Delete-File $root\lib\clojure-$CLOJURE_RELEASE.jar
-Expand-ZipFile $root\clojure-$CLOJURE_RELEASE.zip $root\lib clojure-$CLOJURE_RELEASE\clojure-$CLOJURE_RELEASE.jar
-Move-File $root\lib\clojure-$CLOJURE_RELEASE.jar $root\lib\clojure.jar
-Delete-File $root\clojure-$CLOJURE_RELEASE.zip
+    https://repo1.maven.org/maven2/org/clojure/clojure/$CLOJURE_RELEASE/clojure-$CLOJURE_RELEASE.jar `
+    $root\lib\clojure-$CLOJURE_RELEASE.jar
+
+Write-Host "Fetching specs.alpha...."
+Get-WebResource  `
+    https://repo1.maven.org/maven2/org/clojure/spec.alpha/$SPEC_ALPHA_RELEASE/spec.alpha-$SPEC_ALPHA_RELEASE.jar `
+    $root\lib\spec.alpha-$SPEC_ALPHA_RELEASE.jar
+
+Write-Host "Fetching core.specs.alpha...."
+Get-WebResource  `
+    https://repo1.maven.org/maven2/org/clojure/core.specs.alpha/$CORE_SPECS_ALPHA_RELEASE/core.specs.alpha-$CORE_SPECS_ALPHA_RELEASE.jar `
+    $root\lib\core.specs.alpha-$CORE_SPECS_ALPHA_RELEASE.jar
 
 Write-Host "Fetching data.json..."
 Get-WebResource `
     https://repo1.maven.org/maven2/org/clojure/data.json/$DJSON_RELEASE/data.json-$DJSON_RELEASE.jar `
     $root\lib\data.json-$DJSON_RELEASE.jar
+
+Write-Host "Fetching transit-clj..."
+Get-WebResource `
+    https://repo1.maven.org/maven2/com/cognitect/transit-clj/$TRANSIT_RELEASE/transit-clj-$TRANSIT_RELEASE.jar `
+    $root\lib\transit-clj-$TRANSIT_RELEASE.jar
 
 # TODO: Implement Closure SVN support
 Write-Host "Fetching Google Closure library..."
@@ -111,12 +124,10 @@ Get-WebResource `
 
 Write-Host "Fetching Google Closure compiler..."
 Get-WebResource `
-    https://dl.google.com/closure-compiler/compiler-$CLOSURE_RELEASE.zip `
-    $root\compiler-$CLOSURE_RELEASE.zip
-Get-ChildItem $root\closure\compiler\* | Delete-File
-Expand-ZipFile $root\compiler-$CLOSURE_RELEASE.zip $root\closure\compiler
-Copy-File $root\closure\compiler\compiler.jar $root\lib\compiler.jar
-Delete-File $root\compiler-$CLOSURE_RELEASE.zip
+    http://repo1.maven.org/maven2/com/google/javascript/closure-compiler/v$CLOSURE_RELEASE/closure-compiler-v$CLOSURE_RELEASE.jar `
+    $root\closure-compiler-v$CLOSURE_RELEASE.jar
+Copy-File $root\closure-compiler-v$CLOSURE_RELEASE.jar $root\lib\compiler.jar
+Delete-File $root\closure-compiler-v$CLOSURE_RELEASE.jar
 
 Write-Host "Fetching Rhino..."
 Get-WebResource `
@@ -130,5 +141,10 @@ Write-Host "Fetching tools.reader $TREADER_RELEASE ..."
 Get-WebResource `
     https://repo1.maven.org/maven2/org/clojure/tools.reader/$TREADER_RELEASE/tools.reader-$TREADER_RELEASE.jar `
     $root\lib\tools.reader-$TREADER_RELEASE.jar
+
+Write-Host "Fetching test.check $TEST_CHECK_RELEASE ..."
+Get-WebResource `
+    https://repo1.maven.org/maven2/org/clojure/test.check/$TEST_CHECK_RELEASE/test.check-$TEST_CHECK_RELEASE.jar `
+    $root\lib\test.check-$TEST_CHECK_RELEASE.jar
 
 Write-Host "[Bootstrap Completed]"

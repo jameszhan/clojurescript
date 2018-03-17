@@ -1,7 +1,9 @@
 (ns loader-test.foo
   (:require [goog.dom :as gdom]
             [goog.events :as events]
-            [cljs.loader :as loader])
+            [cljs.loader :as loader]
+            [foreign.a]
+            [foreign.b])
   (:import [goog.events EventType]))
 
 (enable-console-print!)

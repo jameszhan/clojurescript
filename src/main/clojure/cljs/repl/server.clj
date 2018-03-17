@@ -11,38 +11,37 @@
   (:require [clojure.string :as str])
   (:import java.io.BufferedReader
            java.io.InputStreamReader
-           java.net.ServerSocket))
+           java.io.ByteArrayOutputStream
+           java.util.zip.GZIPOutputStream
+           java.net.ServerSocket
+           [java.util LinkedList]))
 
 (def ^:dynamic state nil)
+(def connq (LinkedList.))
+(def promiseq (LinkedList.))
+(def lock (Object.))
 
 (defn connection
-  "Promise to return a connection when one is available. If a
-  connection is not available, store the promise in server/state."
+  "Promise to return a connection when one is available. If no connection is
+   available put the promise into a FIFO queue to get the next available
+   connection."
   []
-  (let [p    (promise)
-        conn (:connection @state)]
-    (if (and conn (not (.isClosed conn)))
-      (do
+  (locking lock
+    (let [p (promise)
+          conn (.poll connq)]
+      (if (and conn (not (.isClosed conn)))
         (deliver p conn)
-        p)
-      (do
-        (swap! state (fn [old] (assoc old :promised-conn p)))
-        p))))
+        (.offer promiseq p))
+      p)))
 
 (defn set-connection
-  "Given a new available connection, either use it to deliver the
-  connection which was promised or store the connection for later
-  use."
+  "Given a new available connection, poll the promise queue for and deliver
+   the connection. Otherwise put the connection into a FIFO queue."
   [conn]
-  (if-let [promised-conn (:promised-conn @state)]
-    (do
-      (swap! state
-        (fn [old]
-          (-> old
-            (assoc :connection nil)
-            (assoc :promised-conn nil))))
-      (deliver promised-conn conn))
-    (swap! state (fn [old] (assoc old :connection conn)))))
+  (locking lock
+    (if-let [p (.poll promiseq)]
+      (deliver p conn)
+      (.offer connq conn))))
 
 (defonce handlers (atom {}))
 
@@ -130,6 +129,18 @@
     404 "HTTP/1.1 404 Not Found"
     "HTTP/1.1 500 Error"))
 
+(defn ^bytes gzip [^bytes bytes]
+  (let [baos (ByteArrayOutputStream. (count bytes))]
+    (try
+      (let [gzos (GZIPOutputStream. baos)]
+        (try
+          (.write gzos bytes)
+          (finally
+            (.close gzos))))
+      (finally
+        (.close baos)))
+    (.toByteArray baos)))
+
 (defn send-and-close
   "Use the passed connection to send a form to the browser. Send a
   proper HTTP response."
@@ -138,16 +149,20 @@
   ([conn status form content-type]
     (send-and-close conn status form content-type "UTF-8"))
   ([conn status form content-type encoding]
-    (let [byte-form (.getBytes form encoding)
+    (send-and-close conn status form content-type encoding false))
+  ([conn status form content-type encoding gzip?]
+    (let [byte-form (cond-> (.getBytes form encoding) gzip? gzip)
           content-length (count byte-form)
           headers (map #(.getBytes (str % "\r\n"))
-                    [(status-line status)
-                     "Server: ClojureScript REPL"
-                     (str "Content-Type: "
-                       content-type
-                       "; charset=" encoding)
-                     (str "Content-Length: " content-length)
-                     ""])]
+                    (cond->
+                      [(status-line status)
+                       "Server: ClojureScript REPL"
+                       (str "Content-Type: "
+                         content-type
+                         "; charset=" encoding)
+                       (str "Content-Length: " content-length)]
+                      gzip? (conj "Content-Encoding: gzip")
+                      true (conj "")))]
       (with-open [os (.getOutputStream conn)]
         (doseq [header headers]
           (.write os header 0 (count header)))
@@ -205,4 +220,6 @@
     (swap! state (fn [old] (assoc old :socket ss :port (:port opts))))))
 
 (defn stop []
-  (.close (:socket @state)))
+  (when-let [sock (:socket @state)]
+    (when-not (.isClosed sock)
+      (.close sock))))

@@ -10,16 +10,16 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
             [clojure.stacktrace]
+            [clojure.data.json :as json]
             [cljs.analyzer :as ana]
             [cljs.env :as env]
             [cljs.util :as util]
             [cljs.repl :as repl]
+            [cljs.cli :as cli]
             [cljs.compiler :as comp]
             [cljs.closure :as closure]
             [cljs.stacktrace :as st])
-  (:import [java.io File]
-           [javax.script ScriptEngine ScriptEngineManager ScriptException ScriptEngineFactory]
-           [com.google.common.base Throwables]))
+  (:import [javax.script ScriptEngine ScriptEngineManager ScriptException ScriptEngineFactory]))
 
 (util/compile-if (Class/forName "jdk.nashorn.api.scripting.NashornException")
   (do
@@ -52,25 +52,19 @@
         (eval-str engine (slurp r))
         (when debug (println "loaded: " path))))
 
-    (defn init-engine [engine output-dir debug]
+    (defn init-engine [engine {:keys [output-dir] :as opts} debug]
+      (eval-str engine (format "var CLJS_DEBUG = %s;" (boolean debug)))
+      (eval-str engine (format "var CLJS_OUTPUT_DIR = \"%s\";" output-dir))
       (eval-resource engine "goog/base.js" debug)
       (eval-resource engine "goog/deps.js" debug)
-      (eval-str engine "var global = this") ; required by React
+      (eval-resource engine "cljs/bootstrap_nashorn.js" debug)
       (eval-str engine
-        (format
-          (str "var nashorn_load = function(path) {"
-            "  var outputPath = \"%s\" + \"/\" + path;"
-            (when debug "  print(\"loading: \" + outputPath) ; ")
-            "  load(outputPath);"
-            "};")
-          output-dir))
-      (eval-str engine
-        (str "goog.global.CLOSURE_IMPORT_SCRIPT = function(path) {"
-          " nashorn_load(\"goog/\" + path);"
-          " return true;"
-          "};"))
-      (eval-str engine "goog.global.isProvided_ = function(name) { return false; };")
+        (format "goog.global.CLOSURE_UNCOMPILED_DEFINES = %s;"
+          (json/write-str (:closure-defines opts))))
       engine)
+
+    (defn tear-down-engine [engine]
+      (eval-str engine "nashorn_tear_down();"))
 
     (defn load-js-file [engine file]
       (eval-str engine (format "nashorn_load(\"%s\");" file)))
@@ -82,8 +76,9 @@
         (let [deps-file ".nashorn_repl_deps.js"
               core (io/resource "cljs/core.cljs")
               core-js (closure/compile core
-                        (assoc opts
-                          :output-file (closure/src-file->target-file core)))
+                        (assoc opts :output-file
+                          (closure/src-file->target-file
+                            core (dissoc opts :output-dir))))
               deps (closure/add-dependencies opts core-js)]
           ;; output unoptimized code and the deps file
           ;; for all compiled namespaces
@@ -109,20 +104,17 @@
     (defrecord NashornEnv [engine debug]
       repl/IReplEnvOptions
       (-repl-options [this]
-        {:output-dir ".cljs_nashorn_repl"})
+        {:output-dir ".cljs_nashorn_repl"
+         :target :nashorn})
       repl/IJavaScriptEnv
       (-setup [this {:keys [output-dir bootstrap output-to] :as opts}]
-        (init-engine engine output-dir debug)
+        (init-engine engine opts debug)
         (let [env (ana/empty-env)]
           (if output-to
             (load-js-file engine output-to)
             (bootstrap-repl engine output-dir opts))
           (repl/evaluate-form this env repl-filename
-            '(do
-               (.require js/goog "cljs.core")
-               (set! *print-newline* false)
-               (set! *print-fn* js/print)
-               (set! *print-err-fn* js/print)))
+            '(.require js/goog "cljs.core"))
           ;; monkey-patch goog.isProvided_ to suppress useless errors
           (repl/evaluate-form this env repl-filename
             '(set! js/goog.isProvided_ (fn [ns] false)))
@@ -157,7 +149,8 @@
                      (.getStackTrace root-cause))))}))))
       (-load [{engine :engine :as this} ns url]
         (load-ns engine ns))
-      (-tear-down [this])
+      (-tear-down [this]
+        (tear-down-engine engine))
       repl/IParseStacktrace
       (-parse-stacktrace [this frames-str ret opts]
         (st/parse-stacktrace this frames-str
@@ -179,8 +172,12 @@
       [& {:as opts}]
       (repl-env* opts))
 
-    (defn -main []
-      (repl/repl (repl-env))))
+    ;; -------------------------------------------------------------------------
+    ;; Command Line Support
+
+    (defn -main [& args]
+      (apply cli/main repl-env args)))
+
   (do
     (defn repl-env* [{:keys [debug] :as opts}]
       (throw (ex-info "Nashorn not supported" {:type :repl-error})))

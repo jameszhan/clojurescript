@@ -7,7 +7,6 @@
 ;   You must not remove this notice, or any other, from this software
 
 (ns cljs.loader
-  (:require-macros cljs.loader)
   (:require [goog.object :as gobj])
   (:import [goog.module ModuleLoader]
            [goog.module ModuleManager]))
@@ -53,19 +52,14 @@
     (when (some? module)
       (.isLoaded module))))
 
-(defn load*
+(defn load
   "Load a module. module-name should be a keyword matching a :modules module
    definition."
   ([module-name]
-    (throw (js/Error. "Invalid load call, must provide loader argument")))
-  ([module-name loader]
-    (load* module-name loader nil))
-  ([module-name loader cb]
+    (load module-name nil))
+  ([module-name cb]
    (assert (contains? module-infos module-name)
      (str "Module " module-name " does not exist"))
-   (assert (loaded? loader)
-     (str "Module " loader " not fully loaded, but attempted to "
-          "load module " module-name))
    (let [mname (-> module-name name munge)]
      (if-not (nil? cb)
        (.execOnLoad *module-manager* mname cb)
@@ -74,9 +68,7 @@
 (defn set-loaded!
   "Set a module as being loaded. module-name should be a keyword matching a
   :modules module definition. Will mark all parent modules as also being
-  loaded. Note that calls to this function will be automatically generated
-  as the final expression for known :modules entry points that require the
-  cljs.loader namespace."
+  loaded."
   [module-name]
   (assert (contains? module-infos module-name)
     (str "Module " module-name " does not exist"))
