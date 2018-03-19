@@ -22,11 +22,12 @@
             [cljs.stacktrace :as st]
             [cljs.analyzer :as ana]
             [cljs.build.api :as build])
-  (:import [java.util.concurrent Executors]))
+  (:import [java.util.concurrent Executors ConcurrentHashMap]))
 
 (def ^:dynamic browser-state nil)
 (def ^:dynamic ordering nil)
 (def ^:dynamic es nil)
+(def outs (ConcurrentHashMap.))
 
 (def ext->mime-type
   {".html" "text/html"
@@ -72,8 +73,8 @@
     (set-return-value-fn return-value-fn)
     (server/send-and-close conn 200
       (json/write-str
-        {"thread" (.getName (Thread/currentThread))
-         "form"   form})
+        {"repl" (.getName (Thread/currentThread))
+         "form" form})
       "application/json")))
 
 (defn- return-value
@@ -207,6 +208,9 @@
 
 (defmethod handle-post :ready [_ conn _]
   (send-via es ordering (fn [_] {:expecting nil :fns {}}))
+  ;; browser refresh, reset connq
+  (locking server/lock
+    (.clear server/connq))
   (send-for-eval conn
     (binding [ana/*cljs-warnings*
               (assoc ana/*cljs-warnings*
@@ -239,11 +243,12 @@
   (send-via es ordering add-in-order order f)
   (send-via es ordering run-in-order))
 
-(defmethod handle-post :print [{:keys [content order]} conn _]
+(defmethod handle-post :print [{:keys [repl content order]} conn _]
   (constrain-order order
     (fn []
-      (print (read-string content))
-      (.flush *out*)))
+      (binding [*out* (or (and repl (.get outs repl)) *out*)]
+        (print (read-string content))
+        (.flush *out*))))
   (server/send-and-close conn 200 "ignore__"))
 
 (defmethod handle-post :result [{:keys [content order]} conn _]
@@ -341,6 +346,7 @@
           (if launch-browser
             (maybe-browse-url base-url)
             (println (waiting-to-connect-message base-url)))))))
+  (.put outs (.getName (Thread/currentThread)) *out*)
   (swap! server-state update :listeners inc))
 
 (defrecord BrowserEnv []
@@ -356,6 +362,7 @@
   (-load [this provides url]
     (load-javascript this provides url))
   (-tear-down [this]
+    (.remove outs (.getName (Thread/currentThread)))
     (let [server-state (:server-state this)]
       (when (zero? (:listeners (swap! server-state update :listeners dec)))
         (binding [server/state server-state] (server/stop))
