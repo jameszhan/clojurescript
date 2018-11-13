@@ -18,8 +18,7 @@
             [clojure.data.json :as json])
   (:import [java.net Socket]
            [java.lang StringBuilder]
-           [java.io File Reader BufferedReader BufferedWriter
-           InputStreamReader IOException]
+           [java.io File BufferedReader BufferedWriter IOException]
            [java.lang ProcessBuilder Process]
            [java.util.concurrent ConcurrentHashMap LinkedBlockingQueue]))
 
@@ -29,7 +28,8 @@
 (def errs (ConcurrentHashMap.))
 
 (defn thread-name []
-  (.getName (Thread/currentThread)))
+  (let [name (.getName (Thread/currentThread))]
+    (if (string/starts-with? name "nREPL") "main" name)))
 
 (defn create-socket [^String host port]
   (let [socket (Socket. host (int port))
@@ -124,7 +124,7 @@
 (defn setup
   ([repl-env] (setup repl-env nil))
   ([{:keys [host port socket state] :as repl-env} opts]
-   (let [tname (.getName (Thread/currentThread))]
+   (let [tname (thread-name)]
      (.put results tname (LinkedBlockingQueue.))
      (.put outs tname *out*)
      (.put errs tname *err*))
@@ -197,7 +197,9 @@
            '(set! (.-require js/goog)
               (fn [name]
                 (js/CLOSURE_IMPORT_SCRIPT
-                  (unchecked-get (.. js/goog -dependencies_ -nameToPath) name)))))
+                  (if (some? goog/debugLoader_)
+                    (.getPathFromDeps_ goog/debugLoader_ name)
+                    (unchecked-get (.. js/goog -dependencies_ -nameToPath) name))))))
          ;; load cljs.core, setup printing
          (repl/evaluate-form repl-env env "<cljs repl>"
            '(do
@@ -213,7 +215,9 @@
                   (when (or (not (contains? *loaded-libs* name)) reload)
                     (set! *loaded-libs* (conj (or *loaded-libs* #{}) name))
                     (js/CLOSURE_IMPORT_SCRIPT
-                      (unchecked-get (.. js/goog -dependencies_ -nameToPath) name)))))))
+                      (if (some? goog/debugLoader_)
+                        (.getPathFromDeps_ goog/debugLoader_ name)
+                        (unchecked-get (.. js/goog -dependencies_ -nameToPath) name))))))))
          (node-eval repl-env
            (str "goog.global.CLOSURE_UNCOMPILED_DEFINES = "
              (json/write-str (:closure-defines opts)) ";")))))
@@ -236,17 +240,17 @@
     (load-javascript this provides url))
   (-tear-down [this]
     (swap! state update :listeners dec)
-    (let [tname (thread-name)]
-      (.remove results tname)
-      (.remove outs tname)
-      (.remove errs tname))
     (locking lock
       (when (zero? (:listeners @state))
         (let [sock @socket]
           (when-not (.isClosed (:socket sock))
             (write (:out sock) ":cljs/quit")
             (while (alive? @proc) (Thread/sleep 50))
-            (close-socket sock)))))))
+            (close-socket sock)))))
+    (let [tname (thread-name)]
+      (.remove results tname)
+      (.remove outs tname)
+      (.remove errs tname))))
 
 (defn repl-env* [options]
   (let [{:keys [host port path debug-port]}

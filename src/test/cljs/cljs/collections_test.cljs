@@ -8,7 +8,7 @@
 
 (ns cljs.collections-test
   (:refer-clojure :exclude [iter])
-  (:require [cljs.test :refer-macros [deftest testing is are]]
+  (:require [cljs.test :refer-macros [deftest testing is are run-tests]]
             [clojure.string :as s]
             [clojure.set :as set]))
 
@@ -998,3 +998,34 @@
     (is (not (realized? xs)))
     (is (not (realized? ys)))
     (is (= () xs ys))))
+
+(deftest test-cljs-2736
+  (let [s #{(with-meta [:a] {:n 42})}]
+    (is (= {:n 42} (meta (s [:a]))))))
+
+(deftest test-cljs-2442
+  (testing "set ctor"
+    (let [coll #{1 2}]
+      (is (not (identical? coll (set coll)))))
+    (is (= #{1 2} (set #{1 2})))
+    (is (nil? (meta (set ^:a #{1 2})))))
+  (testing "vec ctor"
+    (let [coll [1 2]]
+      (is (not (identical? coll (vec coll)))))
+    (is (= [1 2] (vec [1 2])))
+    (is (nil? (meta (vec ^:a [1 2]))))
+    (let [coll (vec (first {:a 1}))]
+      (is (vector? coll))
+      (is (not (map-entry? coll)))
+      (is (= [:a 1] coll)))))
+
+(deftest test-cljs-2798
+  (is (nil? (let [b (chunk-buffer 1)]
+              (chunk-append b 0)
+              (next (chunk-cons (chunk b) nil))))))
+
+(comment
+
+  (run-tests)
+
+  )

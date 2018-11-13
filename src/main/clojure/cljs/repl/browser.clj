@@ -14,20 +14,24 @@
             [clojure.edn :as edn]
             [clojure.data.json :as json]
             [cljs.util :as util]
-            [cljs.env :as env]
             [cljs.closure :as cljsc]
             [cljs.repl :as repl]
             [cljs.cli :as cli]
             [cljs.repl.server :as server]
             [cljs.stacktrace :as st]
             [cljs.analyzer :as ana]
-            [cljs.build.api :as build])
+            [cljs.build.api :as build]
+            [clojure.string :as str])
   (:import [java.util.concurrent Executors ConcurrentHashMap]))
 
 (def ^:dynamic browser-state nil)
 (def ^:dynamic ordering nil)
 (def ^:dynamic es nil)
 (def outs (ConcurrentHashMap.))
+
+(defn thread-name []
+  (let [name (.getName (Thread/currentThread))]
+    (if (string/starts-with? name "nREPL") "main" name)))
 
 (def ext->mime-type
   {".html" "text/html"
@@ -73,7 +77,7 @@
     (set-return-value-fn return-value-fn)
     (server/send-and-close conn 200
       (json/write-str
-        {"repl" (.getName (Thread/currentThread))
+        {"repl" (thread-name)
          "form" form})
       "application/json")))
 
@@ -137,6 +141,15 @@
     "<script src=\"" output-to "\"></script>"
     "</body></html>"))
 
+(defn- path->mime-type [ext->mime-type path default]
+  (let [lc-path (str/lower-case path)
+        last-dot (.lastIndexOf path ".")]
+    (if (pos? last-dot)
+      (-> lc-path
+          (subs last-dot)
+          (ext->mime-type default))
+      default)))
+
 (defn send-static
   [{path :path :as request} conn
    {:keys [static-dir output-to output-dir host port gzip?] :or {output-dir "out"} :as opts}]
@@ -162,19 +175,18 @@
               local-path)]
         (cond
           local-path
-          (if-let [ext (some #(if (.endsWith path %) %) (keys ext->mime-type))]
-            (let [mime-type (ext->mime-type ext "text/plain")
-                  encoding (mime-type->encoding mime-type "UTF-8")]
-              (server/send-and-close conn 200 (slurp local-path :encoding encoding)
-                mime-type encoding (and gzip? (= "text/javascript" mime-type))))
-            (server/send-and-close conn 200 (slurp local-path) "text/plain"))
+          (let [mime-type (path->mime-type ext->mime-type path "text/plain")
+                encoding (mime-type->encoding mime-type "UTF-8")]
+            (server/send-and-close conn 200 (slurp local-path :encoding encoding)
+                                   mime-type encoding (and gzip? (= "text/javascript" mime-type))))
           ;; "/index.html" doesn't exist, provide our own
           (= path "/index.html")
           (server/send-and-close conn 200
             (default-index (or output-to (str output-dir "/main.js")))
             "text/html" "UTF-8")
           (= path (cond->> "/main.js" output-dir (str "/" output-dir )))
-          (let [closure-defines (-> `{clojure.browser.repl/HOST ~host
+          (let [closure-defines (-> `{"goog.json.USE_NATIVE_JSON" true
+                                      clojure.browser.repl/HOST ~host
                                       clojure.browser.repl/PORT ~port}
                                   (merge (:closure-defines @browser-state))
                                   cljsc/normalize-closure-defines
@@ -199,7 +211,7 @@
 
 (server/dispatch-on :get
   (fn [{:keys [path]} _ _]
-    (or (= path "/") (some #(.endsWith path %) (keys ext->mime-type))))
+    (or (= path "/") (path->mime-type ext->mime-type path nil)))
   send-static)
 
 (defmulti handle-post (fn [m _ _ ] (:type m)))
@@ -339,14 +351,14 @@
             (spit target
               (build/build
                 '[(require '[clojure.browser.repl.preload])]
-                (merge (select-keys opts cljsc/known-opts)
+                (merge (dissoc (select-keys opts cljsc/known-opts) :modules)
                   {:opts-cache "brepl_opts.edn"})))))
         (server/start repl-env)
         (let [base-url (str "http://" (:host repl-env) ":" (:port repl-env))]
           (if launch-browser
             (maybe-browse-url base-url)
             (println (waiting-to-connect-message base-url)))))))
-  (.put outs (.getName (Thread/currentThread)) *out*)
+  (.put outs (thread-name) *out*)
   (swap! server-state update :listeners inc))
 
 (defrecord BrowserEnv []
@@ -362,7 +374,7 @@
   (-load [this provides url]
     (load-javascript this provides url))
   (-tear-down [this]
-    (.remove outs (.getName (Thread/currentThread)))
+    (.remove outs (thread-name))
     (let [server-state (:server-state this)]
       (when (zero? (:listeners (swap! server-state update :listeners dec)))
         (binding [server/state server-state] (server/stop))

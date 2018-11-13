@@ -7,7 +7,7 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns cljs.spec.test.alpha
-  (:require-macros [cljs.spec.test.alpha :as m :refer [with-instrument-disabled]])
+  (:require-macros [cljs.spec.test.alpha :as m :refer [with-instrument-disabled setup-static-dispatches]])
   (:require
     [goog.object :as gobj]
     [goog.userAgent.product :as product]
@@ -95,29 +95,37 @@
                                         (get-host-port)
                                         (.-stack (js/Error.))
                                         (get-env) nil))
-                             ed (merge (assoc (s/explain-data* spec [role] [] [] data)
+                             ed (merge (assoc (s/explain-data* spec [] [] [] data)
+                                         ::s/fn (->sym v)
                                          ::s/args args
                                          ::s/failure :instrument)
                                   (when caller
                                     {::caller caller}))]
                          (throw (ex-info
-                                  (str "Call to " v " did not conform to spec:\n" (with-out-str (s/explain-out ed)))
+                                  (str "Call to " v " did not conform to spec." )
                                   ed)))
-                       conformed)))]
-    (doto (fn [& args]
-            (if *instrument-enabled*
-              (with-instrument-disabled
-                (when (:args fn-spec) (conform! v :args (:args fn-spec) args args))
-                (binding [*instrument-enabled* true]
-                  (apply f args)))
-              (apply f args)))
-      (gobj/extend (MetaFn. (fn [& args]
-                              (if *instrument-enabled*
-                                (with-instrument-disabled
-                                  (when (:args fn-spec) (conform! v :args (:args fn-spec) args args))
-                                  (binding [*instrument-enabled* true]
-                                    (apply f args)))
-                                (apply f args))) nil)))))
+                       conformed)))
+        pure-variadic? (and (-> (meta v) :top-fn :variadic?)
+                            (zero? (-> (meta v) :top-fn :max-fixed-arity)))
+        apply' (fn [f args]
+                 (if (and (nil? args)
+                          pure-variadic?)
+                   (.cljs$core$IFn$_invoke$arity$variadic f)
+                   (apply f args)))
+        ret (fn [& args]
+              (if *instrument-enabled*
+                (with-instrument-disabled
+                  (when (:args fn-spec) (conform! v :args (:args fn-spec) args args))
+                  (binding [*instrument-enabled* true]
+                    (apply' f args)))
+                (apply' f args)))]
+    (when-not pure-variadic?
+      (setup-static-dispatches f ret 20)
+      (when-some [variadic (.-cljs$core$IFn$_invoke$arity$variadic f)]
+        (set! (.-cljs$core$IFn$_invoke$arity$variadic ret)
+          (fn [& args]
+            (apply variadic args)))))
+    ret))
 
 (defn- no-fspec
   [v spec]

@@ -2,12 +2,14 @@
   (:require-macros [cljs.spec.test.test-macros])
   (:require [cljs.test :as test :refer-macros [deftest is are run-tests]]
             [cljs.spec.alpha :as s]
-            [cljs.spec.test.alpha :as stest]))
+            [cljs.spec.test.alpha :as stest]
+            [cljs.spec.test.test-ns1]
+            [cljs.spec.test.test-ns2]))
 
 (s/fdef clojure.core/symbol
   :args (s/alt :separate (s/cat :ns string? :n string?)
-          :str string?
-          :sym symbol?)
+               :str string?
+               :sym symbol?)
   :ret symbol?)
 
 (defn h-cljs-1812 [x] true)
@@ -82,3 +84,28 @@
   (is (= [1 2 3] (foo 1 2 3)))
   (is (thrown? js/Error (foo 1 :hello)))
   (stest/unstrument `foo))
+
+(deftest test-2755
+  (is (uri? (ffirst (s/exercise uri? 1)))))
+
+(deftest test-cljs-2665
+  (is (= '#{cljs.spec.test.test-ns1/x cljs.spec.test.test-ns1/y cljs.spec.test.test-ns2/z}
+        (stest/enumerate-namespace '[cljs.spec.test.test-ns1 cljs.spec.test.test-ns2])))
+  (is (= '#{cljs.spec.test.test-ns1/x cljs.spec.test.test-ns1/y cljs.spec.test.test-ns2/z}
+        (stest/enumerate-namespace ['cljs.spec.test.test-ns1 'cljs.spec.test.test-ns2])))
+  (is (= '#{cljs.spec.test.test-ns1/x cljs.spec.test.test-ns1/y}
+        (stest/enumerate-namespace 'cljs.spec.test.test-ns1)))
+  (is (= '#{cljs.spec.test.test-ns2/z}
+        (stest/enumerate-namespace 'cljs.spec.test.test-ns2))))
+
+(defn fn-2953 [x] ::ret-val)
+
+(s/fdef fn-2953 :args (s/cat :x int?))
+
+(deftest test-cljs-2953
+  (stest/instrument `fn-2953)
+  (is @#'stest/*instrument-enabled*)
+  (is (= ::ret-val (stest/with-instrument-disabled
+                     (is (nil? @#'stest/*instrument-enabled*))
+                     (fn-2953 "abc"))))
+  (is @#'stest/*instrument-enabled*))

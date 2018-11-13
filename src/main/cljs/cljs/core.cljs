@@ -187,11 +187,13 @@
   []
   (set! *print-newline* false)
   (set-print-fn!
-    (fn [& args]
-      (.apply (.-log js/console) js/console (into-array args))))
+    (fn []
+      (let [xs (js-arguments)]
+        (.apply (.-log js/console) js/console (garray/clone xs)))))
   (set-print-err-fn!
-    (fn [& args]
-      (.apply (.-error js/console) js/console (into-array args))))
+    (fn []
+      (let [xs (js-arguments)]
+        (.apply (.-error js/console) js/console (garray/clone xs)))))
   nil)
 
 (def
@@ -451,7 +453,7 @@
   ([array idx]
    (when-assert
      (try
-       (assert (or (array? array) (js/goog.isArrayLike array)))
+       (assert (or (array? array) (goog/isArrayLike array)))
        (assert (number? idx))
        (assert (not (neg? idx)))
        (assert (< idx (alength array)))
@@ -465,7 +467,7 @@
   ([array idx val]
    (when-assert
      (try
-       (assert (or (array? array) (js/goog.isArrayLike array)))
+       (assert (or (array? array) (goog/isArrayLike array)))
        (assert (number? idx))
        (assert (not (neg? idx)))
        (assert (< idx (alength array)))
@@ -477,7 +479,7 @@
 
 (defn- checked-aget'
   ([array idx]
-   {:pre [(or (array? array) (js/goog.isArrayLike array))
+   {:pre [(or (array? array) (goog/isArrayLike array))
           (number? idx) (not (neg? idx)) (< idx (alength array))]}
    (unchecked-get array idx))
   ([array idx & idxs]
@@ -485,7 +487,7 @@
 
 (defn- checked-aset'
   ([array idx val]
-   {:pre [(or (array? array) (js/goog.isArrayLike array))
+   {:pre [(or (array? array) (goog/isArrayLike array))
           (number? idx) (not (neg? idx)) (< idx (alength array))]}
    (unchecked-set array idx val))
   ([array idx idx2 & idxv]
@@ -1212,7 +1214,7 @@
         (IndexedSeq. coll 0 nil))
 
       (string? coll)
-      (when-not (zero? (alength coll))
+      (when-not (zero? (.-length coll))
         (IndexedSeq. coll 0 nil))
 
       (native-satisfies? ISeqable coll)
@@ -1864,7 +1866,9 @@ reduces them without incurring seq initialization"
 
       (or (implements? ISeq coll)
           (implements? ISequential coll))
-      (linear-traversal-nth coll n)
+      (if (neg? n)
+        (throw (js/Error. "Index out of bounds"))
+        (linear-traversal-nth coll n))
 
       (native-satisfies? IIndexed coll)
       (-nth coll n)
@@ -1895,7 +1899,9 @@ reduces them without incurring seq initialization"
 
       (or (implements? ISeq coll)
           (implements? ISequential coll))
-      (linear-traversal-nth coll n not-found)
+      (if (neg? n)
+        not-found
+        (linear-traversal-nth coll n not-found))
 
       (native-satisfies? IIndexed coll)
       (-nth coll n not-found)
@@ -2218,6 +2224,7 @@ reduces them without incurring seq initialization"
   "Return true if the seq function is supported for s"
   [s]
   (or
+   (nil? s)
    (satisfies? ISeqable s)
    (array? s)
    (string? s)))
@@ -2426,7 +2433,7 @@ reduces them without incurring seq initialization"
 (defn sort-by
   "Returns a sorted sequence of the items in coll, where the sort
    order is determined by comparing (keyfn item).  Comp can be
-   boolean-valued comparison funcion, or a -/0/+ valued comparator.
+   boolean-valued comparison function, or a -/0/+ valued comparator.
    Comp defaults to compare."
   ([keyfn coll]
    (sort-by keyfn compare coll))
@@ -3551,9 +3558,8 @@ reduces them without incurring seq initialization"
   (-next [coll]
     (if (> (-count chunk) 1)
       (ChunkedCons. (-drop-first chunk) more meta nil)
-      (let [more (-seq more)]
-        (when-not (nil? more)
-          more))))
+      (when-not (nil? more)
+        (-seq more))))
 
   IChunkedSeq
   (-chunked-first [coll] chunk)
@@ -3605,10 +3611,10 @@ reduces them without incurring seq initialization"
 ;;;;;;;;;;;;;;;;
 
 (defn to-array
-  "Naive impl of to-array as a start."
-  [s]
+  "Returns an array containing the contents of coll."
+  [coll]
   (let [ary (array)]
-    (loop [s (seq s)]
+    (loop [s (seq coll)]
       (if-not (nil? s)
         (do (. ary push (first s))
             (recur (next s)))
@@ -5096,7 +5102,7 @@ reduces them without incurring seq initialization"
 
 (defn filter
   "Returns a lazy sequence of the items in coll for which
-  (pred item) returns true. pred must be free of side-effects.
+  (pred item) returns logical true. pred must be free of side-effects.
   Returns a transducer when no collection is provided."
   ([pred]
     (fn [rf]
@@ -5125,7 +5131,7 @@ reduces them without incurring seq initialization"
 
 (defn remove
   "Returns a lazy sequence of the items in coll for which
-  (pred item) returns false. pred must be free of side-effects.
+  (pred item) returns logical false. pred must be free of side-effects.
   Returns a transducer when no collection is provided."
   ([pred] (filter (complement pred)))
   ([pred coll]
@@ -5188,7 +5194,7 @@ reduces them without incurring seq initialization"
 
 (defn filterv
   "Returns a vector of the items in coll for which
-  (pred item) returns true. pred must be free of side-effects."
+  (pred item) returns logical true. pred must be free of side-effects."
   [pred coll]
   (-> (reduce (fn [v o] (if (pred o) (conj! v o) v))
               (transient [])
@@ -5642,12 +5648,23 @@ reduces them without incurring seq initialization"
 
 (es6-iterable PersistentVector)
 
+(declare map-entry?)
+
 (defn vec
   "Creates a new vector containing the contents of coll. JavaScript arrays
   will be aliased and should not be modified."
   [coll]
-  (if (array? coll)
+  (cond
+    (map-entry? coll)
+    [(key coll) (val coll)]
+
+    (vector? coll)
+    (with-meta coll nil)
+
+    (array? coll)
     (.fromArray PersistentVector coll true)
+
+    :else
     (-persistent!
       (reduce -conj!
         (-as-transient (.-EMPTY PersistentVector))
@@ -9001,7 +9018,7 @@ reduces them without incurring seq initialization"
   [f & maps]
   (when (some identity maps)
     (let [merge-entry (fn [m e]
-                        (let [k (first e) v (second e)]
+                        (let [k (key e) v (val e)]
                           (if (contains? m k)
                             (assoc m k (f (get m k) v))
                             (assoc m k v))))
@@ -9083,9 +9100,12 @@ reduces them without incurring seq initialization"
      (set? other)
      (== (count coll) (count other))
      ^boolean
-     (reduce-kv
-       #(or (contains? other %2) (reduced false))
-       true hash-map)))
+     (try
+       (reduce-kv
+         #(or (contains? other %2) (reduced false))
+         true hash-map)
+       (catch js/Error ex
+         false))))
 
   IHash
   (-hash [coll] (caching-hash coll hash-unordered-coll __hash))
@@ -9100,8 +9120,8 @@ reduces them without incurring seq initialization"
   (-lookup [coll v]
     (-lookup coll v nil))
   (-lookup [coll v not-found]
-    (if (-contains-key? hash-map v)
-      v
+    (if-let [entry (-find hash-map v)]
+      (key entry)
       not-found))
 
   ISet
@@ -9234,9 +9254,12 @@ reduces them without incurring seq initialization"
      (set? other)
      (== (count coll) (count other))
      ^boolean
-     (reduce-kv
-       #(or (contains? other %2) (reduced false))
-       true tree-map)))
+     (try
+       (reduce-kv
+         #(or (contains? other %2) (reduced false))
+         true tree-map)
+       (catch js/Error ex
+         false))))
 
   IHash
   (-hash [coll] (caching-hash coll hash-unordered-coll __hash))
@@ -9296,19 +9319,21 @@ reduces them without incurring seq initialization"
 (defn set
   "Returns a set of the distinct elements of coll."
   [coll]
-  (let [in (seq coll)]
-    (cond
-      (nil? in) #{}
+  (if (set? coll)
+    (with-meta coll nil)
+    (let [in (seq coll)]
+      (cond
+        (nil? in) #{}
 
-      (and (instance? IndexedSeq in) (zero? (.-i in)))
-      (.createAsIfByAssoc PersistentHashSet (.-arr in))
+        (and (instance? IndexedSeq in) (zero? (.-i in)))
+        (.createAsIfByAssoc PersistentHashSet (.-arr in))
 
-      :else
-      (loop [^not-native in in
-             ^not-native out (-as-transient #{})]
-        (if-not (nil? in)
-          (recur (next in) (-conj! out (-first in)))
-          (persistent! out))))))
+        :else
+        (loop [^not-native in  in
+               ^not-native out (-as-transient #{})]
+          (if-not (nil? in)
+            (recur (next in) (-conj! out (-first in)))
+            (persistent! out)))))))
 
 (defn hash-set
   "Returns a new hash set with supplied keys.  Any equal keys are
@@ -9462,7 +9487,7 @@ reduces them without incurring seq initialization"
 
 (defn take-while
   "Returns a lazy sequence of successive items from coll while
-  (pred item) returns true. pred must be free of side-effects.
+  (pred item) returns logical true. pred must be free of side-effects.
   Returns a transducer when no collection is provided."
   ([pred]
      (fn [rf]
@@ -9697,7 +9722,7 @@ reduces them without incurring seq initialization"
          (let [fst (first s)
                fv (f fst)
                run (cons fst (take-while #(= fv (f %)) (next s)))]
-           (cons run (partition-by f (seq (drop (count run) s)))))))))
+           (cons run (partition-by f (lazy-seq (drop (count run) s)))))))))
 
 (defn frequencies
   "Returns a map from distinct items in coll to the number of times
@@ -9917,8 +9942,8 @@ reduces them without incurring seq initialization"
         (.cljs$lang$ctorPrWriter obj obj writer opts)
 
         ; Use the new, more efficient, IPrintWithWriter interface when possible.
-        (implements? IPrintWithWriter obj)
-        (-pr-writer ^not-native obj writer opts)
+        (satisfies? IPrintWithWriter obj)
+        (-pr-writer obj writer opts)
 
         (or (true? obj) (false? obj))
         (-write writer (str obj))
@@ -10370,7 +10395,13 @@ reduces them without incurring seq initialization"
 
   IPending
   (-realized? [x]
-    (not f)))
+    (not f))
+
+  IPrintWithWriter
+  (-pr-writer [x writer opts]
+    (-write writer "#object[cljs.core.Delay ")
+    (pr-writer {:status (if (nil? f) :ready :pending), :val value} writer opts)
+    (-write writer "]")))
 
 (defn ^boolean delay?
   "returns true if x is a Delay created with delay"
@@ -10574,15 +10605,17 @@ reduces them without incurring seq initialization"
                 (MapEntry. (thisfn (key x)) (thisfn (val x)) nil)
 
                 (coll? x)
-                (into (empty x) (map thisfn x))
+                (into (empty x) (map thisfn) x)
 
                 (array? x)
-                (vec (map thisfn x))
+                (persistent!
+                 (reduce #(conj! %1 (thisfn %2))
+                         (transient []) x))
 
                 (identical? (type x) js/Object)
-                (into {} (for [k (js-keys x)]
-                           [(keyfn k) (thisfn (unchecked-get x k))]))
-
+                (persistent!
+                 (reduce (fn [r k] (assoc! r (keyfn k) (thisfn (gobject/get x k))))
+                         (transient {}) (js-keys x)))
                 :else x))]
       (f x))))
 
@@ -11347,7 +11380,7 @@ reduces them without incurring seq initialization"
   nil)
 
 (defn remove-tap
-  "Remove f from the tap set the tap set."
+  "Remove f from the tap set."
   [f]
   (maybe-init-tapset)
   (swap! tapset disj f)
@@ -11499,15 +11532,20 @@ reduces them without incurring seq initialization"
     (exists? js/console)
     (enable-console-print!)
 
-    (identical? *target* "nashorn")
+    (or (identical? *target* "nashorn")
+        (identical? *target* "graaljs"))
     (let [system (.type js/Java "java.lang.System")]
       (set! *print-newline* false)
       (set-print-fn!
-        (fn [& args]
-          (.println (.-out system) (.join (into-array args) ""))))
+        (fn []
+          (let [xs (js-arguments)
+                s  (.join (garray/clone xs) "")]
+            (.println (.-out system) s))))
       (set-print-err-fn!
-        (fn [& args]
-          (.println (.-error system) (.join (into-array args) "")))))))
+        (fn []
+          (let [xs (js-arguments)
+                s  (.join (garray/clone xs) "")]
+            (.println (.-error system) s)))))))
 
 (maybe-enable-print!)
 
@@ -11517,7 +11555,7 @@ reduces them without incurring seq initialization"
   should be evaluated." :dynamic true}
   *eval*
   (fn [_]
-    (throw (ex-info "cljs.core/*eval* not bound" {}))))
+    (throw (js/Error. "cljs.core/*eval* not bound"))))
 
 (defn eval
   "Evaluates the form data structure (not text!) and returns the result.

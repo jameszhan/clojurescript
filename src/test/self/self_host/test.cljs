@@ -742,7 +742,9 @@
          :context :expr}
         (fn [{:keys [error value]}]
           (is (nil? error))
-          (is (= '.x (:form value)))
+          (is (= :quote (:op value)))
+          (is (= ''.x (:form value)))
+          (is (= '.x (-> value :expr :form)))
           (inc! l)))
       (cljs/compile-str st
         "`.x"
@@ -1088,7 +1090,7 @@
          :eval node-eval}
         (fn [{:keys [error value] :as m}]
           (is (nil? error))
-          (is (some? (re-find #"foo\.core\.global\$module\$calculator = goog.global.Calculator;" value)))
+          (is (some? (re-find #"foo\.core\.global\$module\$calculator = goog.global\[\"Calculator\"\];" value)))
           (inc! l)))
       (cljs/eval-str
         (atom @st)
@@ -1166,7 +1168,41 @@
            :load calculator-load
            :eval identity}
           (fn [{{:keys [source]} :value}]
-            (is (some? (re-find #"foo\.core\.global\$module\$calculator = goog.global.Calculator;\snull;" source)))
+            (is (some? (re-find #"foo\.core\.global\$module\$calculator = goog.global\[\"Calculator\"\];\snull;" source)))
+            (inc! l)))))))
+
+(deftest test-cljs-2814
+  (is (= "global$module$react" (ana/munge-global-export 'react)))
+  (is (= "global$module$_CIRCA_material_ui$core$styles" (ana/munge-global-export "@material-ui/core/styles")))
+  (is (= "node$module$_CIRCA_material_ui$core$styles" (ana/munge-node-lib "@material-ui/core/styles"))))
+
+(deftest test-cljs-2815
+  (async done
+    (let [st (cljs/empty-state)
+          l (latch 1 done)]
+      (let [x-load (fn [_ cb]
+                     (cb {:lang   :js
+                          :source "global.X = {};"}))]
+        (swap! st assoc :js-dependency-index {"@material-ui/core/styles" {:global-exports {"@material-ui/core/styles" "X"}}
+                                              "@material-ui/core/styles/a" {:global-exports {"@material-ui/core/styles/a" "X.a"}}})
+        (cljs/eval-str
+          (atom @st)
+"(ns foo.core
+  (:require [\"@material-ui/core/styles\" :as mui-styles]
+            [\"@material-ui/core/styles/a\" :as mui-styles-a]))
+
+(mui-styles/createMuiTheme)
+(mui-styles-a/foo)"
+          nil
+          {:context :expr
+           :def-emits-var true
+           :load x-load
+           :eval identity}
+          (fn [{{:keys [source]} :value}]
+            (testing "global exports using string key"
+              (is (some? (re-find #"foo\.core\.global\$module\$_CIRCA_material_ui\$core\$styles = goog.global\[\"X\"\];\s" source))))
+            (testing "global exports points to a sub property"
+              (is (some? (re-find #"foo\.core\.global\$module\$_CIRCA_material_ui\$core\$styles\$a = goog.global\[\"X\"\]\[\"a\"\];\s" source))))
             (inc! l)))))))
 
 (deftest test-cljs-2261

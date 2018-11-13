@@ -621,6 +621,16 @@
   (is (= (meta (with-meta (reify IFoo (foo [this] :foo)) {:foo :bar}))
             {:foo :bar})))
 
+
+(defprotocol Slashy (/ [_]))
+
+(extend-type string
+       Slashy
+       (/ [_] "result"))
+
+(deftest test-protocol-with-slash
+  (is (=  "result" (/ ""))))
+
 (let [x "original"]
   (defn original-closure-stmt [] x))
 
@@ -726,6 +736,14 @@
   (testing "Testing CLJS-495, exists?"
     (is (false? (exists? js/jQuery)))
     (is (exists? exists?-test-val))))
+
+(deftest test-2764
+  (testing "Testing CLJS-2764, exists? on multi-segment symbols"
+    (is (false? (exists? this.ns.does.not.exist)))
+    (is (true? (exists? cljs.core.first)))
+    (is (true? (exists? cljs.core/first)))
+    (is (true? (exists? (:foo {:foo 1}))))
+    (is (false? (exists? (:foo {}))))))
 
 (deftest test-518
   (is (nil? (:test "test"))))
@@ -1537,6 +1555,21 @@
   ;; Make sure we didn't delete the alpha? fn
   (is (some? alpha-2585?)))
 
+(defn fn-2741* ([x]) ([x y]))
+(def fn-2741 fn-2741*)
+
+(deftest test-cljs-2741
+  (is (thrown-with-msg? js/Error #".*Invalid arity: 0" ((fn ([x]) ([x y])))))
+  (is (thrown-with-msg? js/Error #".*Invalid arity: 3" ((fn ([x]) ([x y])) 1 2 3)))
+  (is (thrown-with-msg? js/Error #".*Invalid arity: 0" (fn-2741)))
+  (is (thrown-with-msg? js/Error #".*Invalid arity: 3" (fn-2741 1 2 3)))
+  (is (thrown-with-msg? js/Error #".*Invalid arity: 0" ({})))
+  (is (thrown-with-msg? js/Error #".*Invalid arity: 3" ({} 1 2 3))))
+
+(deftest test-cljs-2799
+  (is (thrown? js/Error (nth (repeat :x) -1)))
+  (is (= ::not-found (nth (repeat :x) -1 ::not-found))))
+
 (comment
   ;; ObjMap
   ;; (let [ks (map (partial str "foo") (range 500))
@@ -1567,3 +1600,53 @@
     (is (uri? (goog.Uri. "")))
     (is (uri? (goog.Uri. "http://clojurescript.org")))
     (is (uri? (goog.Uri. "some string")))))
+
+(defrecord CLJS-2787 [])
+
+(deftest test-cljs-2787
+  (let [x (map->CLJS-2787 {1 2})
+        y (map->CLJS-2787 x)]
+    (is (= x y))))
+
+(deftest test-cljs-2807
+  (testing "Quoted sets should work"
+    (is (macroexpand '(fn [x] #{(into [] x)})))))
+
+(deftest var-desugar-test
+  (testing "dotted variable in return position"
+    (= cljs.core.PersistentQueue.EMPTY
+       ((fn [] cljs.core.PersistentQueue.EMPTY)))
+    (= 1
+       (let [a #js {:b 1}]
+         ((fn [] a.b))))))
+
+(deftest test-cljs-2832
+  (is (true? ((comp not empty?) "foo")))
+  (is (false? ((comp not empty?) "")))
+  (is (thrown? js/Error ((not empty?) "foo")))
+  (is (thrown? js/Error ((not empty?) ""))))
+
+(deftest test-cljs-2864
+  (is (= "" (str)))
+  (is (= "a" (str "a")))
+  (is (= "1" (str 1)))
+  (is (= "xyzzy" (str "x" "y" "z" "z" "y")))
+  (is (= "a1b2c3" (str "a" 1 "b" 2 "c" 3))))
+
+(deftest test-cljs-2934
+  (let [x (delay 1)]
+    (is (= "#object[cljs.core.Delay {:status :pending, :val nil}]" (pr-str x)))
+    (force x)
+    (is (= "#object[cljs.core.Delay {:status :ready, :val 1}]" (pr-str x)))))
+
+(deftest test-cljs-2943
+  (let [m1 {:a 2, :b 3, :c 5}
+        m2 {:a 7, :b 11, :d 13, :e 17}
+        m3 {:a 19, :d 23, :f 29}
+        m4 {:a 28, :b 14, :c 5, :d 36, :e 17, :f 29}
+        sorted (fn [m] (into (sorted-map) m))]
+    (is (= m4 (merge-with + m1 m2 m3)))
+    (is (= m4 (merge-with + (sorted m1) m2 m3)))
+    (is (= m4 (merge-with + (sorted m1) (sorted m2) m3)))
+    (is (= m4 (merge-with + m1 (sorted m2) m3)))
+    (is (= m4 (merge-with + m1 (sorted m2) (sorted m3))))))

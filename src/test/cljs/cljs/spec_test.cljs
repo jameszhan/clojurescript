@@ -126,6 +126,7 @@
         plus (s/+ keyword?)
         opt (s/? keyword?)
         andre (s/& (s/* keyword?) even-count?)
+        andre2 (s/& (s/* keyword?) #{[:a]})
         m (s/map-of keyword? string?)
         mkeys (s/map-of (s/and keyword? (s/conformer name)) any?)
         mkeys2 (s/map-of (s/and keyword? (s/conformer name)) any? :conform-keys true)
@@ -135,6 +136,19 @@
         lrange (s/int-in 7 42)
         drange (s/double-in :infinite? false :NaN? false :min 3.1 :max 3.2)
         irange (s/inst-in #inst "1939" #inst "1946")]
+
+    (when-not js/COMPILED
+      ;; CLJS-2483: these won't work with both :advanced and :none optimization settings
+      (are [spec x conformed ed]
+        (let [co (s/conform spec x)
+              e  (::s/problems (s/explain-data spec x))]
+          (when (not= conformed co) (println "conform fail\n\texpect=" conformed "\n\tactual=" co))
+          (when (not (every? true? (map submap? ed e)))
+            (println "explain failures\n\texpect=" ed "\n\tactual failures=" e "\n\tsubmap?=" (map submap? ed e)))
+          (and (= conformed co) (every? true? (map submap? ed e))))
+        keyword? nil ::s/invalid [{:pred `keyword? :val nil}]
+        keyword? "abc" ::s/invalid [{:pred `keyword? :val "abc"}]))
+
     (are [spec x conformed ed]
       (let [co (s/conform spec x)
             e  (::s/problems (s/explain-data spec x))]
@@ -159,8 +173,6 @@
       ;; drange Double/NaN ::s/invalid {[] {:pred '(not (isNaN %)), :val Double/NaN}}
 
       keyword? :k :k nil
-      keyword? nil ::s/invalid [{:pred ::s/unknown :val nil}]
-      keyword? "abc" ::s/invalid [{:pred ::s/unknown :val "abc"}]
 
       a 6 6 nil
       a 3 ::s/invalid '[{:pred (cljs.core/fn [%] (cljs.core/> % 5)), :val 3}]
@@ -204,7 +216,7 @@
 
       opt nil nil nil
       opt [] nil nil
-      opt :k ::s/invalid '[{:pred (cljs.spec.alpha/? cljs.core/keyword?), :val :k}]
+      opt :k ::s/invalid '[{:pred (cljs.core/fn [%] (cljs.core/or (cljs.core/nil? %) (cljs.core/sequential? %))), :val :k}]
       opt [:k] :k nil
       opt [:k1 :k2] ::s/invalid '[{:reason "Extra input", :pred (cljs.spec.alpha/? cljs.core/keyword?), :val (:k2)}]
       opt [:k1 :k2 "x"] ::s/invalid '[{:reason "Extra input", :pred (cljs.spec.alpha/? cljs.core/keyword?), :val (:k2 "x")}]
@@ -212,9 +224,13 @@
 
       andre nil nil nil
       andre [] nil nil
-      andre :k ::s/invalid '[{:pred (cljs.spec.alpha/& (cljs.spec.alpha/* cljs.core/keyword?) cljs.spec-test/even-count?), :val :k}]
+      andre :k ::s/invalid '[{:pred (cljs.core/fn [%] (cljs.core/or (cljs.core/nil? %) (cljs.core/sequential? %))), :val :k}]
       andre [:k] ::s/invalid '[{:pred cljs.spec-test/even-count?, :val [:k]}]
       andre [:j :k] [:j :k] nil
+
+      andre2 nil ::s/invalid [{:pred #{[:a]}, :val []}]
+      andre2 [] ::s/invalid [{:pred #{[:a]}, :val []}]
+      andre2 [:a] [:a] nil
 
       m nil ::s/invalid '[{:pred cljs.core/map?, :val nil}]
       m {} {} nil
@@ -293,9 +309,137 @@
     [{10 10 20 "x"}]
     [{10 10 20 "x"}]))
 
+(deftest &-explain-pred
+  (are [val expected]
+    (= expected (-> (s/explain-data (s/& int? even?) val) ::s/problems first :pred))
+    [] 'cljs.core/int?
+    [0 2] '(cljs.spec.alpha/& cljs.core/int? cljs.core/even?)))
+
+(deftest keys-explain-pred
+  (is (= 'cljs.core/map? (-> (s/explain-data (s/keys :req [::x]) :a) ::s/problems first :pred))))
+
+(deftest remove-def
+  (is (= ::ABC (s/def ::ABC string?)))
+  (is (= ::ABC (s/def ::ABC nil)))
+  (is (nil? (s/get-spec ::ABC))))
+
+;; TODO replace this with a generative test once we have specs for s/keys
+(deftest map-spec-generators
+  (s/def ::a nat-int?)
+  (s/def ::b boolean?)
+  (s/def ::c keyword?)
+  (s/def ::d double?)
+  (s/def ::e inst?)
+  (s/def ::f some?)
+
+  (is (= #{[::a]
+           [::a ::b]
+           [::a ::b ::c]
+           [::a ::c]}
+        (->> (s/exercise (s/keys :req [::a] :opt [::b ::c]) 100)
+          (map (comp sort keys first))
+          (into #{}))))
+
+  (is (= #{[:a]
+           [:a :b]
+           [:a :b :c]
+           [:a :c]}
+        (->> (s/exercise (s/keys :req-un [::a] :opt-un [::b ::c]) 100)
+          (map (comp sort keys first))
+          (into #{}))))
+
+  (is (= #{[::a ::b]
+           [::a ::b ::c ::d]
+           [::a ::b ::c ::d ::e]
+           [::a ::b ::c ::e]
+           [::a ::c ::d]
+           [::a ::c ::d ::e]
+           [::a ::c ::e]}
+        (->> (s/exercise (s/keys :req [::a (or ::b (and ::c (or ::d ::e)))]) 200)
+          (map (comp vec sort keys first))
+          (into #{}))))
+
+  (is (= #{[:a :b]
+           [:a :b :c :d]
+           [:a :b :c :d :e]
+           [:a :b :c :e]
+           [:a :c :d]
+           [:a :c :d :e]
+           [:a :c :e]}
+        (->> (s/exercise (s/keys :req-un [::a (or ::b (and ::c (or ::d ::e)))]) 200)
+          (map (comp vec sort keys first))
+          (into #{}))))
+
+  (is (every? some? (map #(-> % first) (s/exercise ::f 10)))))
+
+(deftest tuple-explain-pred
+  (are [val expected]
+    (= expected (-> (s/explain-data (s/tuple int?) val) ::s/problems first :pred))
+    :a 'cljs.core/vector?
+    [] '(cljs.core/= (cljs.core/count %) 1)))
+
 (s/fdef foo.bar/cljs-2275
   :args (s/cat :k keyword?)
   :ret  string?)
+
+(defn foo-2793 [m & args]
+  {:m m, :args args})
+
+(defn bar-2793
+  ([x] {:x x})
+  ([x y] {:x x, :y y})
+  ([x y & m] {:x x, :y y, :m m}))
+
+(defn baz-2793 [x & ys])
+
+(defn quux-2793 [& numbers])
+
+(s/fdef foo-2793)
+(s/fdef bar-2793)
+(s/fdef baz-2793 :args (s/cat :x number? :ys (s/* number?)))
+
+(st/instrument `foo-2793)
+(st/instrument `bar-2793)
+(st/instrument `baz-2793)
+(st/instrument `quux-2793)
+
+(deftest cljs-2793-test
+  (is (= {:m {:x 1 :y 2}
+          :args nil}
+        (foo-2793 {:x 1 :y 2})))
+  (is (= {:m {:x 1 :y 2}
+          :args [1]}
+        (foo-2793 {:x 1 :y 2} 1)))
+  (is (= {:m {:x 1 :y 2}
+          :args [1 2]}
+        (foo-2793 {:x 1 :y 2} 1 2)))
+  (is (= {:x 1}
+        (bar-2793 1)))
+  (is (= {:x 1
+          :y 2}
+        (bar-2793 1 2)))
+  (is (= {:x 1
+          :y 2
+          :m [3]}
+        (bar-2793 1 2 3)))
+  (is (= {:x 1
+          :y 2
+          :m [3 4]}
+        (bar-2793 1 2 3 4)))
+  (is (nil? (baz-2793 1)))
+  (is (nil? (quux-2793))))
+
+(s/def ::cljs-2940-foo (s/cat :bar (s/nilable ::cljs-2940-foo)))
+
+(deftest describing-evaled-specs
+  (let [sp #{1 2}]
+    (is (= (s/describe sp) (s/form sp) sp)))
+  ;; won't work under advanced
+  (when-not js/COMPILED
+    (is (= (s/describe odd?) 'odd?))
+    (is (= (s/form odd?) 'cljs.core/odd?)))
+  (is (= (s/describe #(odd? %)) ::s/unknown))
+  (is (= (s/form #(odd? %)) ::s/unknown)))
 
 (comment
 

@@ -1,4 +1,161 @@
-## Next
+## 1.10.439
+
+### Changes
+* CLJS-2904: Default :npm-deps to false
+* CLJS-2878: Update Closure Compiler to v20180805
+* CLJS-2827: Avoid var special in core macros for private var access
+* CLJS-2819: Warn on non-dynamic earmuffed vars
+* CLJS-2806: Bump test.check to 0.10.0-alpha3
+* CLJS-2815: Support string keys in :global-exports
+* CLJS-2812: Support for overriding object printing
+* CLJS-2805: Bump tools.reader to 1.3.0
+* CLJS-1702: Warning when using private vars
+* Align ClojureScript AST to tools.analyzer
+
+### Enhancements
+* CLJS-2903: Support fingerprinting
+* CLJS-2897: cljs.main: Display initial REPL prompt sooner
+* CLJS-2884: Support for GraalJS RC6
+* CLJS-2859: Graal.JS: Enable high-res timers by default, allow user-configuration
+* CLJS-2831: Add a graaljs REPL environment
+* CLJS-1997: Outward function type hint propagation
+* CLJS-844: Optimize js->clj by switching to transients
+* CLJS-2442: `set` and `vec` performance enhancements
+
+### Fixes
+* CLJS-2953: stest/with-instrument-disabled prints warning of private use
+* CLJS-2728: Ability to disable macro spec checks
+* CLJS-2843: s/explain of evaluated predicate yields :s/unknown
+* CLJS-2951: Add a spec generator for some?
+* CLJS-2940: Can't define nilable spec on undefined pred
+* CLJS-2948: Stack overflow calling instrumented variadic fn with zero args
+* CLJS-2793: Instrumenting breaks function with varargs
+* CLJS-2934: Enhanced delay printing
+* CLJS-2864: Optimize str macro for single arity case
+* CLJS-1297: defrecord does not emit IKVReduce protocol
+* CLJS-2937: docstring for to-array
+* CLJS-2943: Update merge-with to use key / val
+* CLJS-2941: seqable? should return true for nil
+* CLJS-2915: Tests fail if directory has a period (.) in the path
+* CLJS-2782: lein test fails if directory has hyphens
+* CLJS-2911: Avoid infinite loop on infinite partitions
+* CLJS-2906: cljs.main: Crash when with default REPL
+* CLJS-2883: Instrumentation fails compilation with a large number of spec'd functions
+* CLJS-2896: Allow parallel analysis and compilation
+* CLJS-2893: seq: use .-length instead of alength for strings
+* CLJS-2890: fspec role in problem path is not useful
+* CLJS-2887: Improve names in core macro specs
+* CLJS-2891: stop including data in ex-info message
+* CLJS-2888: Printing of spec problems buries the failing predicate which should be more prominent
+* CLJS-2861: Self-host: :checked-arrays not working
+* CLJS-2852: Clojure imparity: ns-publics returns different arglists for macros
+* CLJS-2725: Doc on spec keywords
+* CLJS-2665: Port clojure.spec.test.alpha/enumerate-namespace
+* CLJS-2848: Default explain printer prints root val and spec
+* CLJS-2846: [spec] s/tuple explain-data :pred problem
+* CLJS-2847: s/coll-of and s/every gen is very slow if :kind specified without :into
+* CLJS-2841: [spec] instrument exception doesn't contain function name in ex-data
+* CLJS-2842: [spec] Clarify s/every docstring for :kind
+* CLJS-2845: [spec] generate random subsets of or'd required keys in map specs
+* CLJS-2844: [spec] Add support for undefining a spec
+* CLJS-2840: [spec] s/keys explain-data :pred problem
+* CLJS-2839: [spec] s/& explain-data :pred problem
+* CLJS-2838: [spec] s/& does not check preds if regex matches empty collection
+* CLJS-2837: [spec] `cat` specs should verify value is sequential
+* CLJS-2541: binding not made in parallel
+* CLJS-2832: Bad code gen for `((not empty?) "foo")` when compiled with no optimizations
+* CLJS-2855: Browser REPL prints empty string after require
+* CLJS-2821: Update doto docstring to not use Java example
+* CLJS-2817: Suppress private var warnings for specs on private vars
+* CLJS-2822: cljs.core.specs.alpha: Map bindings should be `:kind map?`
+* CLJS-2829: Fix deep object property access for :global-exports
+* CLJS-2816: Skip non-string package.json browser entry values
+* CLJS-2814: Fix munge-node-lib/global-export on self-host
+* CLJS-2811: cljs-1537-circular-deps fail on Windows
+* CLJS-2807: Macroexpand failure with set literal
+* CLJS-2799: Handle nth on seqables with negative indexes
+* CLJS-2798: ChunkCons -next doesn't handle nil more
+* CLJS-2589: allow / as a protocol method name in cljs
+
+## 1.10.339
+
+### Changes
+* Bump transit-clj to 0.8.309
+
+## 1.10.329
+
+### Changes
+* add :val to :const node
+* rename ast op :constant -> :const
+
+### Fixes
+* CLJS-2787: Record comparison is broken when instance is constructed from another record instance via map factory
+* CLJS-2780: Async tests prematurely terminate in Node
+* CLJS-2783: with-out-str conflicts with :infer-externs
+* CLJS-2730: Fix docstrings in filter, filtev, remove, and take-while
+* CLJS-2703: module name substitution test fails if hypen in directory path
+* CLJS-2731: Failure comparing sorted sets
+* CLJS-2746: Missing provides for JS modules
+* CLJS-2772: Trying to run `cljs.main` repl with `:modules` results in `brepl_deps.js` being `clojure.lang.LazySeq`
+* CLJS-2736: Elements returned from sets as functions are not the actual elements in the set
+* CLJS-2298: REPLs should automatically load user.(cljs|cljc) files at root of Java classpath
+
+## 1.10.312
+
+### Enhancements
+* CLJS-1871: A declare with :arglists should generate static function calls
+* CLJS-2688 cljs.main: Accumulate all meaningful repeated inits modules using global-exports
+* CLJS-2681: Accepting multiple paths to the --watch option for cljs.main
+* CLJS-2706: Better error messages when missing namespaces contain dashes
+
+### Changes
+* CLJS-2777: Bump Closure-compiler
+* validate :main
+* CLJS-2771: Elide "use strict"1 from final output
+
+### Fixes
+* CLJS-2278 & CLJS-2279
+* goog.global lookup must be a string
+* CLJS-2775: cljs.main: Node modules not installed if -re node
+* CLJS-2767: Externs inference warnings for defrecord and deftype
+* CLJS-2754: Broken cli tests
+* CLJS-2769: Eliminate goog.structs.AvlTree.Node in self-parity test
+* CLJS-2766: Revisions to exists? fails in self-host
+* CLJS-2764: exists? is not nil safe
+* CLJS-2760 Make browser repl web-severs mime-type case-insensitive
+* CLJS-2755: Can't generate uri instances
+* CLJS-1677: Requiring [goog] breaks an :advanced build, but the compiler exits successfully
+* Recompile cljs.loader in REPL
+* CLJS-2733: Throw error message if too few or too many args to throw
+* CLJS-2751: script/bootstrap --closure-library-head misses goog/text
+* CLJS-2480: Periods at end of analyzer warnings
+* CLJS-2618 Fix docstring for `remove-tap`
+* CLJS-2743 Fix docstring misspelling
+* CLJS-2724: Native Node modules Node (like "fs") cannot be required
+* CLJS-2702: Accomodate new Closure Library dependency loading strategy
+* CLJS-2741: Function invoke errors report arity off by 1
+* CLJS-2745: Add GraalVM to the set of JavaScript engines we can test against
+* CLJS-2739: Optimize node_modules indexing
+* CLJS-2619: clojure.reflect needs exclude for macroexpand
+* CLJS-2713: test-reader fails on Windows
+* CLJS-2715: Have goog-define return the var at the REPL
+* CLJS-2727: cljs.repl/err-out visible from cljs
+* CLJS-2734: Add :arglists to defmulti
+* CLJS-2721: test-cljs-2580 failing in windows CI
+* CLJS-2726: test-cljs-2678-global-exports-infer failing on Windows
+* CLJS-2678: Infer-externs doesn't work for JS modules using global-exports
+* CLJS-2718: Setting *warn-on-infer* in REPL throws a SyntaxError
+* CLJS-2385: cljs.analyzer/infer-type pass infers tag with incorrect priority
+* CLJS-1918: case needs a type hint for keywords case when using *warn-on-infer*
+* CLJS-1970: Cannot infer target type for list/vector expressions
+* CLJS-2669: Use simple dummy package for test-cljs-2580
+* CLJS-2716: Add ChakraCore to Windows CI (AppVeyor)
+* CLJS-2147: apply test suit
+* CLJS-2711: System newline breaking some tests on Windows
+* CLJS-2712: Make Windows CI fail if a test fails
+* CLJS-2708: Windows. ClojureScript fails to compile when node.js module is `require`d
+
+## 1.10.238
 
 ### Enhancements
 * cljs.main, simple command line access to Compiler & REPLs
@@ -8,9 +165,13 @@
   defaults to true when using :modules.
 * Add :webworker & :nashorn target
 * pREPL implementation (usage requires Clojure 1.10.0-alpha)
+* Add :package-json-resolution build option, allowing to choose which
+  package.json entries are being used; defaults to :webpack (if no :target
+  is set) or :nodejs (if the :target is :nodejs); also supports a custom
+  vector of entries (e.g. ["browser", "main"]).
 
 ### Changes
-* * CLJS-2592: :npm-deps using ES6 modules with .mjs extensions are not detected correctly
+* CLJS-2592: :npm-deps using ES6 modules with .mjs extensions are not detected correctly
 * AOTed ClojureScript artifact is now the default, for sources only use the
   "slim" Maven classifier
 * Bump Closure Compiler
@@ -25,6 +186,18 @@
 * CLJS-2581: Create a cljs.repl/*repl-env* dynamic var and bind it around cljs repl loops
 
 ### Fixes
+* CLJS-2680: Passing :watch-fn via --compile-opts to cljs.main
+* CLJS-2692: cljs.core.specs.alpha: Import list needs to require quote
+* CLJS-2696: Large code size in Clojurescript 1.10.x for minimal code with optimizations advanced
+* CLJS-2699: Use higher-level Closure API for module-processing
+* CLJS-2691: goog.require in module-processed files shouldn't require goog.base
+* CLJS-2689: Don't try to use node resolve for goog: modules
+* CLJS-2676: Bad cljs.loader behavior for modules with multiple provides
+* CLJS-2673: Regression: Can't require cljs.js
+* CLJS-2650: Fix JAR compilation of cljs.loader
+* CLJS-2671: Double analysis warning for source in JAR with AOT cache
+* CLJS-2643: Socket REPL output can be directed to the wrong place
+* CLJS-2670: Update cljs.compiler/warning-types
 * CLJS-2491: Inference warnings are not reported
 * CLJS-2653: REPL crash when mapping stacktrace in Chrome for js/blah
 * CLJS-2639: Compiler crash when using aot cache with parallel compile

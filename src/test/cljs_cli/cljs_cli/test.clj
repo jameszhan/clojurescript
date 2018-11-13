@@ -4,7 +4,8 @@
    [clojure.java.io :as io]
    [clojure.java.shell :as shell :refer [with-sh-dir]]
    [clojure.string :as str]
-   [cljs-cli.util :refer [cljs-main output-is with-sources with-post-condition with-repl-env-filter]]))
+   [cljs-cli.util :refer [cljs-main output-is with-sources with-in with-post-condition with-repl-env-filter repl-title]]
+   [clojure.string :as string]))
 
 (deftest eval-test
   (-> (cljs-main "-e" 3 "-e" nil "-e" 4)
@@ -94,5 +95,35 @@
           "-e" "(require 'cljs.js)"
           "-e" "(cljs.js/eval-str (cljs.js/empty-state) \"(+ 1 2)\" nil {:eval cljs.js/js-eval :context :expr} prn)")
       (output-is
-        nil
         "{:ns cljs.user, :value 3}"))))
+
+(deftest test-cljs-2724
+  (with-repl-env-filter #{"node"}
+    (-> (cljs-main
+          "-e" "(require 'fs)"
+          "-e" "fs/R_OK")
+      (output-is
+        4))))
+
+(deftest test-cljs-2775
+  (with-repl-env-filter #{"node"}
+    (-> (cljs-main
+          "-co" "{:npm-deps {:left-pad \"1.3.0\"} :install-deps true}"
+          "-d" "out"
+          "-e" "(require 'left-pad)"
+          "-e" "(left-pad 3 10 0)")
+      (output-is "\"0000000003\""))))
+
+(deftest test-cljs-2780
+  (with-repl-env-filter #{"node" "nashorn" "graaljs"}
+    (-> (cljs-main
+          "-e" "(do (js/setTimeout #(prn :end) 500) nil)"
+          "-e" ":begin")
+      (output-is
+        :begin
+        :end))))
+
+(deftest test-graaljs-polyglot
+  (with-repl-env-filter #{"graaljs"}
+    (-> (cljs-main "-e" "(.eval js/Polyglot \"js\" \"1+1\")")
+      (output-is 2))))

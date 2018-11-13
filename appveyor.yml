@@ -32,15 +32,21 @@ install:
   - ps: Install-Product node $env:nodejs_version x64
   - ps: wget 'http://ftp.mozilla.org/pub/firefox/nightly/latest-mozilla-central/jsshell-win64.zip' -OutFile "$pwd\jsshell.zip"
   - ps: 7z x "-o$pwd\jsshell" jsshell.zip -r
+  - ps: wget 'https://aka.ms/chakracore/cc_windows_all_1_8_1' -OutFile "$pwd\chakra-core.zip"
+  - ps: 7z x "-o$pwd\chakra-core" chakra-core.zip -r
   - ps: .\script\bootstrap.ps1
   - ps: "[Console]::OutputEncoding = [Text.UTF8Encoding]::UTF8"
   - ps: $env:SPIDERMONKEY_HOME = "$pwd/jsshell"
   - ps: $SPIDERMONKEY_HOME = "$pwd/jsshell"
+  - ps: $env:CHAKRACORE_HOME = "$pwd/chakra-core/x64_release"
+  - ps: $CHAKRACORE_HOME = "$pwd/chakra-core/x64_release"
 
 test_script:
   - cmd: lein test
-  # surprisingly this is the only way to have the output shown in Appveyor
-  - cmd: powershell -noninteractive -noprofile -command .\script\test.ps1
+  - cmd: powershell -noninteractive -noprofile -command .\script\test.ps1 > test-out.txt
+  - cmd: type test-out.txt
+  # Since tests are currently only run in 2 JavaScript environments, look for exactly 2 counts of "0 failures, 0 errors."
+  - cmd: powershell -noninteractive -noprofile -command if (-not ((sls -Pattern '0 failures, 0 errors.' -SimpleMatch test-out.txt).count -eq 2)) { exit 1 }
 
 # Don't actually build (MSBuild).
 build: off

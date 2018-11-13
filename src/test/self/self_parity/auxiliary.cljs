@@ -87,7 +87,6 @@
     goog.iter.Iterable
     goog.iter.Iterator
     goog.json
-    goog.json.EvalJsonProcessor
     goog.json.NativeJsonProcessor
     goog.json.Replacer
     goog.json.Reviver
@@ -132,7 +131,6 @@
     goog.string.newlines.Line
     goog.structs
     goog.structs.AvlTree
-    goog.structs.AvlTree.Node
     goog.structs.CircularBuffer
     goog.structs.Heap
     goog.structs.InversionMap

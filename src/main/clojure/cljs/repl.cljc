@@ -27,6 +27,7 @@
   (:import [java.io File PushbackReader FileWriter PrintWriter]
            [java.net URL]
            [java.util Base64]
+           [java.util.concurrent.atomic AtomicLong]
            [clojure.lang IExceptionInfo]
            [java.util.regex Pattern]
            [com.google.common.base Throwables]))
@@ -42,7 +43,7 @@
     :reader :repl-requires :repl-verbose :source-map-inline :watch :watch-fn
     :wrap})
 
-(defmacro err-out [& body]
+(defmacro ^:private err-out [& body]
   `(binding [*out* *err*]
      ~@body))
 
@@ -198,6 +199,7 @@
 (defn ns->input [ns opts]
   (or (some-> (util/ns->source ns) (ana/parse-ns opts))
       (some-> (get-in @env/*compiler* [:js-dependency-index (str ns)]) add-url)
+      (some-> (deps/find-classpath-lib ns))
       (throw
         (ex-info (str ns " does not exist")
           {::error :invalid-ns}))))
@@ -205,10 +207,34 @@
 (defn compilable? [input]
   (contains? input :source-file))
 
+(defn- load-sources
+  "Load the compiled `sources` into the REPL."
+  [repl-env sources opts]
+  (if (:output-dir opts)
+    ;; REPLs that read from :output-dir just need to add deps,
+    ;; environment will handle actual loading - David
+    (let [sb (StringBuffer.)]
+      (doseq [source sources]
+        (with-open [rdr (io/reader (:url source))]
+          (.append sb (cljsc/add-dep-string opts source))))
+      (when (:repl-verbose opts)
+        (println (.toString sb)))
+      (-evaluate repl-env "<cljs repl>" 1 (.toString sb)))
+    ;; REPLs that stream must manually load each dep - David
+    (doseq [{:keys [url provides]} sources]
+      (-load repl-env provides url))))
+
+(defn- load-cljs-loader
+  "Compile and load the cljs.loader namespace if it's present in `sources`."
+  [repl-env sources opts]
+  (when-let [source (first (filter #(= (:ns %) 'cljs.loader) sources))]
+    (cljsc/compile-loader sources opts)
+    (load-sources repl-env [source] opts)))
+
 (defn load-namespace
   "Load a namespace and all of its dependencies into the evaluation environment.
-  The environment is responsible for ensuring that each namespace is loaded once and
-  only once."
+  The environment is responsible for ensuring that each namespace is
+  loaded once and only once. Returns the compiled sources."
   ([repl-env ns] (load-namespace repl-env ns nil))
   ([repl-env ns opts]
    (let [ns      (if (and (seq? ns) (= (first ns) 'quote)) (second ns) ns)
@@ -220,29 +246,18 @@
                                 (merge (env->opts repl-env) opts))
                            (remove (comp #{["goog"]} :provides)))
                          (map #(cljsc/source-on-disk opts %)
-                           (cljsc/add-js-sources [input] opts))))))]
+                              (cljsc/add-js-sources [input] opts))))))]
      (when (:repl-verbose opts)
        (println (str "load-namespace " ns " , compiled:") (map :provides sources)))
-     (if (:output-dir opts)
-       ;; REPLs that read from :output-dir just need to add deps,
-       ;; environment will handle actual loading - David
-       (let [sb (StringBuffer.)]
-         (doseq [source sources]
-           (with-open [rdr (io/reader (:url source))]
-             (.append sb
-               (cljsc/add-dep-string opts source))))
-         (when (:repl-verbose opts)
-           (println (.toString sb)))
-         (-evaluate repl-env "<cljs repl>" 1 (.toString sb)))
-       ;; REPLs that stream must manually load each dep - David
-       (doseq [{:keys [url provides]} sources]
-         (-load repl-env provides url))))))
+     (load-sources repl-env sources opts)
+     sources)))
 
 (defn- load-dependencies
-  ([repl-env requires] (load-dependencies repl-env requires nil))
+  "Compile and load the given `requires` and return the compiled sources."
+  ([repl-env requires]
+   (load-dependencies repl-env requires nil))
   ([repl-env requires opts]
-   (doseq [ns (distinct requires)]
-     (load-namespace repl-env ns opts))))
+   (doall (mapcat #(load-namespace repl-env % opts) (distinct requires)))))
 
 (defn ^File js-src->cljs-src
   "Map a JavaScript output file back to the original ClojureScript source
@@ -516,8 +531,8 @@
            (if (:source-map repl-env)
              (binding [comp/*source-map-data*
                        (atom {:source-map (sorted-map)
-                              :gen-col 0
-                              :gen-line 0})]
+                              :gen-line 0})
+                       comp/*source-map-data-gen-col* (AtomicLong.)]
                (let [js (comp/emit-str ast)
                      t (System/currentTimeMillis)]
                  (str js
@@ -543,11 +558,12 @@
                      (ana/no-warn (ana/analyze env form nil opts))
                      (catch #?(:clj Exception :cljs js/Error) e
                          (reset! env/*compiler* backup-comp)
-                       (throw e)))]
-           (load-dependencies repl-env
-             (into (vals (:requires ast))
-               (distinct (vals (:uses ast))))
-             opts)))
+                         (throw e)))
+               sources (load-dependencies repl-env
+                         (into (vals (:requires ast))
+                               (distinct (vals (:uses ast))))
+                         opts)]
+           (load-cljs-loader repl-env sources opts)))
        (when *cljs-verbose*
          (err-out (println wrap-js)))
        (let [ret (-evaluate repl-env filename (:line (meta form)) wrap-js)]
@@ -595,7 +611,8 @@
               (util/ns->relpath ns (util/ext (:source-url compiled))))
             (slurp src)))
         ;; need to load dependencies first
-        (load-dependencies repl-env (:requires compiled) opts)
+        (let [sources (load-dependencies repl-env (:requires compiled) opts)]
+          (load-cljs-loader repl-env (conj sources compiled) opts))
         (-evaluate repl-env f 1 (cljsc/add-dep-string opts compiled))
         (-evaluate repl-env f 1
           (cljsc/src-file->goog-require src
@@ -836,13 +853,19 @@
           (cljsc/maybe-install-node-deps! opts)
           installed?)))))
 
+(defn initial-prompt [quit-prompt prompt]
+  (quit-prompt)
+  (prompt)
+  (flush))
+
 (defn repl*
   [repl-env {:keys [init inits need-prompt quit-prompt prompt flush read eval print caught reader
-                    print-no-newline source-map-inline wrap repl-requires
+                    print-no-newline source-map-inline wrap repl-requires ::fast-initial-prompt?
                     compiler-env bind-err]
              :or {need-prompt #(if (readers/indexing-reader? *in*)
                                 (== (readers/get-column-number *in*) 1)
                                 (identity true))
+                  fast-initial-prompt? false
                   quit-prompt repl-title
                   prompt repl-prompt
                   flush flush
@@ -862,6 +885,8 @@
   (doseq [[unknown-opt suggested-opt] (util/unknown-opts (set (keys opts)) (set/union known-repl-opts cljsc/known-opts))]
     (when suggested-opt
       (println (str "WARNING: Unknown option '" unknown-opt "'. Did you mean '" suggested-opt "'?"))))
+  (when fast-initial-prompt?
+    (initial-prompt quit-prompt prompt))
   (let [repl-opts (-repl-options repl-env)
         repl-requires (into repl-requires (:repl-requires repl-opts))
         {:keys [analyze-path repl-verbose warn-on-undeclared special-fns
@@ -937,6 +962,9 @@
                                 (:require ~@repl-requires))
                              {:line 1 :column 1})
                            identity opts)))
+               maybe-load-user-file #(when-let [user-resource (util/ns->source 'user)]
+                                       (when (= "file" (.getProtocol ^URL user-resource))
+                                         (load-file repl-env (io/file user-resource) opts)))
                read-eval-print
                (fn []
                  (let [input (binding [*ns* (create-ns ana/*cljs-ns*)
@@ -967,6 +995,7 @@
                        (analyze-source analyze-path opts)))
                    (init)
                    (run-inits repl-env inits)
+                   (maybe-load-user-file)
                    (catch Throwable e
                      (caught e repl-env opts)))
                  (when-let [src (:watch opts)]
@@ -989,9 +1018,8 @@
                  (binding [*in* (if (true? (:source-map-inline opts))
                                   *in*
                                   (reader))]
-                   (quit-prompt)
-                   (prompt)
-                   (flush)
+                   (when-not fast-initial-prompt?
+                     (initial-prompt quit-prompt prompt))
                    (loop []
                      (when-not
                        (try
@@ -1211,7 +1239,8 @@ itself (not its value) is returned. The reader macro #'x expands to (var x)."}})
     :repl-special-function true))
 
 (defmacro doc
-  "Prints documentation for a var or special form given its name"
+  "Prints documentation for a var or special form given its name,
+  or for a spec if given a keyword"
   [name]
   `(print
      (binding [cljs.core/*print-newline* true]
@@ -1224,6 +1253,9 @@ itself (not its value) is returned. The reader macro #'x expands to (var x)."}})
 
               (repl-special-doc-map name)
               `(cljs.repl/print-doc (quote ~(repl-special-doc name)))
+
+              (keyword? name)
+              `(cljs.repl/print-doc {:spec ~name :doc (cljs.spec.alpha/describe ~name)})
 
               (ana-api/find-ns name)
               `(cljs.repl/print-doc

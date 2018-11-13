@@ -8,6 +8,7 @@
 
 (ns test-runner
   (:require [cljs.test :refer-macros [run-tests]]
+            [cljs.apply-test]
             [cljs.primitives-test]
             [cljs.destructuring-test]
             [cljs.new-new-test]
@@ -45,12 +46,13 @@
             [static.core-test]
             [cljs.recur-test]
             [cljs.array-access-test]
-            [cljs.extend-to-object-test]))
+            [cljs.extend-to-native-test]))
 
 (set! *print-newline* false)
 (set-print-fn! js/print)
 
 (run-tests
+  'cljs.apply-test
   'cljs.primitives-test
   'cljs.destructuring-test
   'cljs.new-new-test
@@ -88,4 +90,4 @@
   'static.core-test
   'cljs.recur-test
   'cljs.array-access-test
-  'cljs.extend-to-object-test)
+  'cljs.extend-to-native-test)

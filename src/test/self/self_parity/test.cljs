@@ -42,7 +42,9 @@
   (set! (.-require js/goog)
     (fn [name]
       (js/CLOSURE_IMPORT_SCRIPT
-        (gobj/get (.. js/goog -dependencies_ -nameToPath) name))))
+        (if goog/debugLoader_
+          (.getPathFromDeps_ goog/debugLoader_ name)
+          (gobj/get (.. js/goog -dependencies_ -nameToPath) name)))))
   ;; setup printing
   (nodejs/enable-util-print!)
   ;; redef goog.require to track loaded libs
@@ -52,7 +54,9 @@
       (when (or (not (contains? *loaded-libs* name)) reload)
         (set! *loaded-libs* (conj (or *loaded-libs* #{}) name))
         (js/CLOSURE_IMPORT_SCRIPT
-          (gobj/get (.. js/goog -dependencies_ -nameToPath) name))))))
+          (if goog/debugLoader_
+            (.getPathFromDeps_ goog/debugLoader_ name)
+            (gobj/get (.. js/goog -dependencies_ -nameToPath) name)))))))
 
 ;; Node file reading fns
 
@@ -179,6 +183,7 @@
        'goog.array
        'cljs.core
        'cljs.env
+       'cljs.tagged-literals
        'cljs.tools.reader
        'clojure.walk}) name))
 
@@ -299,13 +304,14 @@
                  [cljs.clojure-alias-test]
                  [cljs.hash-map-test]
                  [cljs.map-entry-test]
+                 [cljs.set-equiv-test]
                  [cljs.syntax-quote-test]
                  [cljs.predicates-test]
                  [cljs.test-test]
                  [static.core-test]
                  [cljs.recur-test]
                  [cljs.array-access-test]
-                 [cljs.extend-to-object-test]))
+                 [cljs.extend-to-native-test]))
     (fn [{:keys [value error]}]
       (if error
         (handle-error error (:source-maps @st))
@@ -341,13 +347,14 @@
              'cljs.clojure-alias-test
              'cljs.hash-map-test
              'cljs.map-entry-test
+             'cljs.set-equiv-test
              'cljs.syntax-quote-test
              'cljs.predicates-test
              'cljs.test-test
              'static.core-test
              'cljs.recur-test
              'cljs.array-access-test
-             'cljs.extend-to-object-test)
+             'cljs.extend-to-native-test)
           (fn [{:keys [value error]}]
             (when error
               (handle-error error (:source-maps @st)))))))))

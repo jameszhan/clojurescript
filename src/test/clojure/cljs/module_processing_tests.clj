@@ -36,6 +36,8 @@
                    (.getAbsolutePath $)
                    (subs $ 0 (.lastIndexOf $ (str File/separator)))
                    (string/replace $ "/" "$")
+                   (string/replace $ \. \-)
+                   (cond-> $ code? (string/replace "-" "_"))
                    ;; Windows
                    (string/replace $ "\\" "$")
                    (if code?

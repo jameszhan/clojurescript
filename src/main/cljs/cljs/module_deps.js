@@ -1,3 +1,8 @@
+// NOTE: This code should only employ single quotes for strings.
+// If double quotes are used, then when the contents of this file
+// are passed to node via --eval on Windows, the double quotes
+// will be elided, leading to syntactically incorrect JavaScript.
+
 let fs = require('fs');
 let path = require('path');
 let mdeps = require('@cljs-oss/module-deps');
@@ -81,7 +86,8 @@ let md = mdeps({
         resolver(parentOpts.basedir, id, cb);
     },
     filter: function (id) {
-        return !(target === 'nodejs' && nodeResolve.isCore(id));
+        return !(target === 'nodejs' && nodeResolve.isCore(id)) &&
+            !id.startsWith('goog:');
     },
     detect: function (src) {
         let deps = getDeps(src);
@@ -179,7 +185,7 @@ md.on('end', function () {
         let pkgJson = pkgJsons[i];
         const candidates = /\.js(on)?$/.test(pkgJson.mainEntry)
             ? [pkgJson.mainEntry]
-            : [pkgJson.mainEntry, pkgJson.mainEntry + '.js', pkgJson.mainEntry + '/index.js', pkgJson.mainEntry + '.json'];
+            : [pkgJson.mainEntry, pkgJson.mainEntry + '.js', pkgJson.mainEntry + 'FILE_SEPARATOR' + 'index.js', pkgJson.mainEntry + '.json'];
 
         for (let j = 0; j < candidates.length; j++) {
           const candidate = candidates[j];
@@ -195,14 +201,17 @@ md.on('end', function () {
 
           if (fieldValue != null && typeof fieldValue === 'object') {
             for (let key in fieldValue) {
-              const replacement = path.resolve(pkgJson.basedir, fieldValue[key]);
+              // TODO: False value means that the module should be ignored
+              if (typeof fieldValue[key] === 'string') {
+                const replacement = path.resolve(pkgJson.basedir, fieldValue[key]);
 
-              if (deps_files[replacement] != null) {
-                const file = path.resolve(pkgJson.basedir, key);
-                deps_files[replacement].provides = depProvides(deps_files[replacement].provides, file);
+                if (deps_files[replacement] != null) {
+                  const file = path.resolve(pkgJson.basedir, key);
+                  deps_files[replacement].provides = depProvides(deps_files[replacement].provides, file);
 
-                if (file === pkgJson.mainEntry) {
-                  Array.prototype.push.apply(deps_files[replacement].provides, pkgJson.provides);
+                  if (file === pkgJson.mainEntry) {
+                    Array.prototype.push.apply(deps_files[replacement].provides, pkgJson.provides);
+                  }
                 }
               }
             }

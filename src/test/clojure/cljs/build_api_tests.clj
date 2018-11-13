@@ -9,16 +9,18 @@
 (ns cljs.build-api-tests
   (:refer-clojure :exclude [compile])
   (:import java.io.File)
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [cljs.analyzer :as ana]
+            [cljs.build.api :as build]
+            [cljs.closure :as closure]
+            [cljs.env :as env]
+            [cljs.test-util :as test]
+            [cljs.util :as util]
             [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.java.shell :as sh]
-            [cljs.env :as env]
-            [cljs.analyzer :as ana]
-            [cljs.util :as util]
-            [cljs.test-util :as test]
-            [cljs.build.api :as build]
-            [cljs.closure :as closure]))
+            [clojure.test :refer [deftest is testing]]
+            [clojure.string :as string]))
 
 (deftest test-target-file-for-cljs-ns
   (is (= (.getPath (build/target-file-for-cljs-ns 'example.core-lib nil))
@@ -179,14 +181,16 @@
          :output-to out})
       (is false)
       (catch Throwable e
-        (is (re-find  #"Circular dependency detected, circular-deps.a -> circular-deps.b -> circular-deps.a"
-              (.getMessage (.getCause e))))))))
+        (let [cause-message (.getMessage (.getCause e))]
+          (is (or (re-find #"Circular dependency detected, circular-deps.a -> circular-deps.b -> circular-deps.a" cause-message)
+                  (re-find #"Circular dependency detected, circular-deps.b -> circular-deps.a -> circular-deps.b" cause-message))))))))
 
 (defn loader-test-project [output-dir]
   {:inputs (str (io/file "src" "test" "cljs_build" "loader_test"))
    :opts
    {:output-dir output-dir
     :optimizations :none
+    :language-in :es6
     :verbose true
     :foreign-libs [{:file "src/test/cljs_build/loader_test/foreignA.js"
                     :provides ["foreign.a"]}
@@ -389,16 +393,32 @@
                                                        {:file "src/test/cljs_build/thirdparty/add.js"
                                                         :provides ["react-dom/server"]
                                                         :requires ["react-dom"]
-                                                        :global-exports '{react-dom/server ReactDOMServer}}]}}
+                                                        :global-exports '{react-dom/server ReactDOMServer}}
+                                                       {:file "src/test/cljs_build/thirdparty/add.js"
+                                                        :provides ["@material-ui/core/styles"
+                                                                   "@material-ui/core/styles/a"]
+                                                        ;; Key str because contains multiple /, value shouldn't matter
+                                                        :global-exports {"@material-ui/core/styles" "MaterialUIStyles"
+                                                                         "@material-ui/core/styles/a" "MaterialUIStyles.a"}}]}}
           cenv (env/default-compiler-env)]
       (test/delete-out-files out)
       (ana/with-warning-handlers [(collecting-warning-handler ws)]
         (build/build (build/inputs (io/file inputs "emit_global_requires_test/core.cljs")) opts cenv))
       (is (.exists (io/file out "emit_global_requires_test/core.js")))
-      (is (true? (boolean (re-find #"emit_global_requires_test\.core\.global\$module\$react_dom\$server = goog\.global\.ReactDOMServer;"
+      (is (true? (boolean (re-find #"emit_global_requires_test\.core\.global\$module\$react_dom\$server = goog\.global\[\"ReactDOMServer\"\];"
                             (slurp (io/file out "emit_global_requires_test/core.js"))))))
       (is (true? (boolean (re-find #"emit_global_requires_test\.core\.global\$module\$react_dom\$server\.renderToString"
                             (slurp (io/file out "emit_global_requires_test/core.js"))))))
+      (testing "global exports using string key"
+        (is (true? (boolean (re-find #"emit_global_requires_test\.core\.global\$module\$_CIRCA_material_ui\$core\$styles = goog\.global\[\"MaterialUIStyles\"\];"
+                                     (slurp (io/file out "emit_global_requires_test/core.js"))))))
+        (is (true? (boolean (re-find #"emit_global_requires_test\.core\.global\$module\$_CIRCA_material_ui\$core\$styles\.createMuiTheme"
+                                     (slurp (io/file out "emit_global_requires_test/core.js")))))))
+      (testing "global exports points to a sub property"
+        (is (true? (boolean (re-find #"emit_global_requires_test\.core\.global\$module\$_CIRCA_material_ui\$core\$styles\$a = goog\.global\[\"MaterialUIStyles\"\]\[\"a\"\];"
+                                     (slurp (io/file out "emit_global_requires_test/core.js"))))))
+        (is (true? (boolean (re-find #"emit_global_requires_test\.core\.global\$module\$_CIRCA_material_ui\$core\$styles\$a\.foo"
+                                     (slurp (io/file out "emit_global_requires_test/core.js")))))))
       (is (empty? @ws)))))
 
 (deftest test-data-readers
@@ -451,6 +471,7 @@
         {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
                                :opts {:main 'node-modules-opt-test.core
                                       :output-dir out
+                                      :npm-deps true
                                       :optimizations :none
                                       :closure-warnings {:check-types :off}}}
         cenv (env/default-compiler-env opts)]
@@ -626,3 +647,35 @@
         (is (re-find  #"module\$.+\$node_modules\$graphql\$index\[\"default\"\]" (slurp core-js))))))
   (.delete (io/file "package.json"))
   (test/delete-node-modules))
+
+(deftest test-fingerprint
+  (let [out  (io/file (test/tmp-dir) "cljs-2903-out")
+        opts {:output-to (.getPath (io/file out "main.js"))
+              :output-dir (.getPath out)
+              :fingerprint true
+              :stable-names true
+              :optimizations :advanced}]
+    (test/delete-out-files out)
+    (build/build "src/test/cljs/hello.cljs" opts)
+    (let [mf  (edn/read-string (slurp (io/file out "manifest.edn")))
+          f   (io/file (get mf (:output-to opts)))
+          sha (string/lower-case (util/content-sha (slurp (io/file f)) 7))]
+      (is (true? (.exists f)))
+      (is (string/includes? (.getPath f) sha)))))
+
+(deftest test-fingerprint-modules
+  (let [out (.getPath (io/file (test/tmp-dir) "cljs-2903-modules-out"))
+        project (update-in (test/project-with-modules out)
+                  [:opts] merge
+                  {:fingerprint true
+                   :stable-names true
+                   :optimizations :advanced})]
+    (test/delete-out-files out)
+    (build/build (build/inputs (:inputs project)) (:opts project))
+    (let [mf (edn/read-string (slurp (io/file out "manifest.edn")))]
+      (doseq [[name {:keys [output-to]}] (get-in project [:opts :modules])]
+        (when-not (= :cljs-base name)
+          (let [f   (io/file (get mf output-to))
+                sha (string/lower-case (util/content-sha (slurp (io/file f)) 7))]
+           (is (true? (.exists f)))
+           (is (string/includes? (.getPath f) sha))))))))

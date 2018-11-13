@@ -56,13 +56,15 @@
   "Qualify symbol s by resolving it or using the current *ns*."
   [env s]
   (if (namespace s)
-    (->sym (ana/resolve-var env s))
+    (->sym (binding [ana/*private-var-access-nowarn* true]
+             (ana/resolve-var env s)))
     (symbol (str ana/*cljs-ns*) (str s))))
 
 (defmacro def
-  "Given a namespace-qualified keyword or resolveable symbol k, and a spec,
-   spec-name, predicate or regex-op makes an entry in the registry mapping k to
-   the spec"
+  "Given a namespace-qualified keyword or resolveable symbol k, and a
+  spec, spec-name, predicate or regex-op makes an entry in the
+  registry mapping k to the spec. Use nil to remove an entry in
+  the registry for k."
   [k spec-form]
   (let [k    (if (symbol? k) (ns-qualify &env k) k)
         form (res &env spec-form)]
@@ -226,7 +228,7 @@
 
   Takes several kwargs options that further constrain the collection:
 
-  :kind - a pred/spec that the collection type must satisfy, e.g. vector?
+  :kind - a pred that the collection type must satisfy, e.g. vector?
           (default nil) Note that if :kind is specified and :into is
           not, this pred must generate in order for every to generate.
   :count - specifies coll has exactly this count (default nil)
@@ -360,7 +362,7 @@
   conjunction of the predicates, and any conforming they might perform."
   [re & preds]
   (let [pv (vec preds)]
-    `(amp-impl ~re ~pv '~(mapv #(res &env %) pv))))
+    `(amp-impl ~re '~(res &env re) ~pv '~(mapv #(res &env %) pv))))
 
 (defmacro conformer
   "takes a predicate function with the semantics of conform i.e. it should return either a
@@ -551,7 +553,7 @@ value of 'cljs.spec.alpha/*runtime-asserts*', or false if not set. You can
 toggle check-asserts? with (check-asserts bool)."
   [spec x]
   `(if *compile-asserts*
-     (if *runtime-asserts*
+     (if @#'*runtime-asserts*
        (assert* ~spec ~x)
        ~x)
     ~x))

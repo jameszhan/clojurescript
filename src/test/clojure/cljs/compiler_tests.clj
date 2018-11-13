@@ -18,6 +18,17 @@
             [clojure.string :as str])
   (:import [java.io File]))
 
+(defn analyze
+  ([env form]
+   (env/ensure (ana/analyze env form)))
+  ([env form name]
+   (env/ensure (ana/analyze env form name)))
+  ([env form name opts]
+   (env/ensure (ana/analyze env form name opts))))
+
+(defn emit [ast]
+  (env/ensure (comp/emit ast)))
+
 (def aenv (assoc-in (ana/empty-env) [:ns :name] 'cljs.user))
 (def cenv (env/default-compiler-env))
 
@@ -39,37 +50,37 @@
 (deftest fn-scope-munge
   (is (= (comp/munge
            (get-in
-             (ana/analyze aenv
+             (analyze aenv
                '(defn foo []
                   (fn bar [])))
              [:init :name]))
          'cljs$user$foo))
   (is (= (comp/munge
            (get-in
-             (ana/analyze aenv
+             (analyze aenv
                '(defn foo []
                   (fn bar [])))
-             [:init :children 0 :children 0 :name]))
+             [:init :methods 0 :body :ret :local]))
           'cljs$user$foo_$_bar))
   (is (= (comp/munge
            (get-in
-             (ana/analyze aenv
+             (analyze aenv
                '(fn []
                   (fn console [])))
-             [:children 0 :children 0 :name]))
+             [:methods 0 :body :ret :local]))
          'cljs$user$console)))
 
 (deftest test-js-negative-infinity
   (is (= (with-out-str
-           (comp/emit
-             (ana/analyze (assoc aenv :context :expr) 'js/-Infinity)))
+           (emit
+             (analyze (assoc aenv :context :expr) 'js/-Infinity)))
           "-Infinity")))
 
 (deftest test-cljs-2352
   (are [form result]
       (= (with-out-str
-           (comp/emit
-             (ana/analyze (assoc aenv :context :expr) form)))
+           (emit
+             (analyze (assoc aenv :context :expr) form)))
          result)
     Double/NaN "NaN"
     Double/POSITIVE_INFINITY "Infinity"
@@ -82,14 +93,16 @@
          (ana/no-warn
            (env/with-compiler-env cenv
              (comp/munge
-               (:info (ana/analyze {:ns {:name 'cljs.core}} 'cljs.core/..))))))))
+               (:info (analyze {:ns {:name 'cljs.core}} 'cljs.core/..))))))))
 
 (deftest test-resolve-dotdot
   (is (= '{:name cljs.core/..
            :ns   cljs.core}
          (ana/no-warn
            (env/with-compiler-env cenv
-             (ana/resolve-var {:ns {:name 'cljs.core}} '..))))))
+             (select-keys
+               (ana/resolve-var {:ns {:name 'cljs.core}} '..)
+               [:name :ns]))))))
 
 (deftest test-cljs-428
   (letfn [(check-docs [docs]
@@ -98,14 +111,14 @@
                   (env/ensure
                     (comp/emit-comment "/* multiline comments */" nil))))
     (check-docs (with-out-str
-                  (comp/emit
-                    (ana/analyze aenv
+                  (emit
+                    (analyze aenv
                       '(defn foo "foo is */ like this /*/" [] (+ 1 1))))))))
 
 (comment
   (env/with-compiler-env cenv
-    (comp/emit
-      (ana/analyze aenv
+    (emit
+      (analyze aenv
         '(defn foo ([a]) ([a b])))))
   )
 
@@ -131,8 +144,8 @@
         (ana/analyze-file (File. "src/main/cljs/cljs/core.cljs"))
         (let [warnings (-> (capture-warnings
                              (with-out-str
-                               (comp/emit
-                                 (ana/analyze aenv
+                               (emit
+                                 (analyze aenv
                                    '(let [{:keys [a] :or {b 2}} {:a 1}] [a b]))))))]
           (is (= (ffirst warnings) :undeclared-var))
           (is (.startsWith (-> warnings first second)
@@ -153,8 +166,8 @@
          (capture-warnings
           (env/with-compiler-env (atom cenv-with-foo)
             (with-out-str
-              (comp/emit
-               (ana/analyze aenv-with-foo form))))))
+              (emit
+               (analyze aenv-with-foo form))))))
 
         '(cljs.user/foo nil)
         '(cljs.user/foo 0)
@@ -212,10 +225,10 @@
                 (capture-warnings
                   (env/with-compiler-env cenv
                     (with-out-str
-                      (comp/emit
+                      (emit
                         (comp/with-core-cljs
                           opts
-                          (fn [] (ana/analyze aenv test-cljs-1925-code nil opts)))))))))))
+                          (fn [] (analyze aenv test-cljs-1925-code nil opts)))))))))))
   (let [opts {:static-fns true}
         cenv (env/default-compiler-env opts)]
     (is (= [] (binding [ana/*unchecked-if* false
@@ -223,10 +236,10 @@
                 (capture-warnings
                   (env/with-compiler-env cenv
                     (with-out-str
-                      (comp/emit
+                      (emit
                         (comp/with-core-cljs
                           opts
-                          (fn [] (ana/analyze aenv specify-test-code nil opts))))))))))))
+                          (fn [] (analyze aenv specify-test-code nil opts))))))))))))
 
 
 (deftest test-optimized-invoke-emit
@@ -266,7 +279,9 @@
       (is (re-find #"(?m)^.*var fexpr.*=.*cljs.core.complement\(funexpr1\);$"
                    content))
       (is (re-find #"(?m)^.*var .*=.*inv_arg1.cljs.core.IFn._invoke.arity.0 \?.*$"
-                   content)))))
+                   content))
+      ;; CLJS-1871: A declare hinted with :arglists meta should result in static dispatch
+      (is (str/includes? content "cljs.invoke_test.declared_fn(")))))
 #_(test-vars [#'test-optimized-invoke-emit])
 
 ;; CLJS-1225
@@ -274,8 +289,8 @@
 (comment
   (binding [ana/*cljs-static-fns* true]
     (env/with-compiler-env cenv
-      (comp/emit
-        (ana/analyze aenv
+      (emit
+        (analyze aenv
           '(defn incme []
              (let [incme (fn [a queue & args])]
                (println (incme 1 [1] 1 1))))))))
@@ -286,8 +301,8 @@
 
   (binding [ana/*cljs-static-fns* true]
     (env/with-compiler-env cenv
-      (comp/emit
-        (ana/analyze aenv
+      (emit
+        (analyze aenv
           '(defn foo [x]
              (if ^boolean (goog.array/isEmpty x)
                true
