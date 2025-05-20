@@ -102,25 +102,42 @@ global.CLOSURE_IMPORT_SCRIPT = function(src, opt_sourceText) {
  */
 global.CLOSURE_LOAD_FILE_SYNC = function(src) {
     return fs.readFileSync(
-      path.resolve(__dirname, '..', src), {encoding: 'utf-8'});
+      path.resolve(__dirname, "..", src), {encoding: "utf-8"});
 };
 
 
 // Declared here so it can be used to require base.js
 function nodeGlobalRequire(file) {
-    var _module = global.module, _exports = global.exports;
+    var _module  = global.module,
+        _exports = global.exports,
+        exportedRequire = false;
+
+    // to circumvent Node.js environment detection in bundled libraries
     global.module = undefined;
     global.exports = undefined;
+
+    // to allow requires of Node.js libraries (i.e. platform libs) that
+    // couldn't be bundled for some reason
+    if(global.require == undefined) {
+        exportedRequire = true;
+        global.require = require;
+    }
+
     vm.runInThisContext.call(global, fs.readFileSync(file), file);
+
     global.exports = _exports;
     global.module = _module;
+
+    if(exportedRequire) {
+        global.require = undefined;
+    }
 }
 
 
 // Load Closure's base.js into memory.  It is assumed base.js is in the
 // directory above this directory given this script's location in
 // bootstrap/nodejs.js.
-nodeGlobalRequire(path.resolve(__dirname, '..', 'base.js'));
+nodeGlobalRequire(path.resolve(__dirname, "..", "base.js"));
 
 
 /**

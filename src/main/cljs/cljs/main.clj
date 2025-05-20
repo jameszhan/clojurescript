@@ -8,16 +8,20 @@
 
 (ns cljs.main
   (:require [cljs.repl.browser :as browser]
-            [cljs.cli :as cli])
+            [cljs.cli :as cli]
+            [clojure.string :as string])
   (:gen-class))
+
+(defn single-segment? [x]
+  (== 1 (count (string/split x #"\."))))
 
 (defn- get-js-opt [args]
   (if (= 2 (count args))
-    (let [repl-ns (symbol
-                    (str "cljs.repl."
-                      (if (= 1 (count args))
-                        "nashorn"
-                        (nth args 1))))]
+    (let [ns-frag (nth args 1)
+          repl-ns (symbol
+                    (cond->> ns-frag
+                      (single-segment? ns-frag)
+                      (str "cljs.repl.")))]
       (try
         (require repl-ns)
         (if-let [repl-env (ns-resolve repl-ns 'repl-env)]
@@ -25,10 +29,10 @@
           (throw
             (ex-info (str "REPL namespace " repl-ns " does not define repl-env var")
               {:repl-ns repl-ns})))
-        (catch Throwable _
+        (catch Throwable t
           (throw
-            (ex-info (str "REPL namespace " repl-ns " does not exist")
-              {:repl-ns repl-ns})))))
+            (ex-info (str "Failed to load REPL namespace " repl-ns)
+              {:repl-ns repl-ns} t)))))
     browser/repl-env))
 
 (defn- normalize* [args]

@@ -8,8 +8,8 @@
 
 (ns cljs.core.server
   (:refer-clojure :exclude [with-bindings resolve-fn prepl io-prepl])
-  (:require [clojure.tools.reader.reader-types :as readers]
-            [clojure.tools.reader :as reader]
+  (:require [cljs.vendor.clojure.tools.reader.reader-types :as readers]
+            [cljs.vendor.clojure.tools.reader :as reader]
             [cljs.env :as env]
             [cljs.closure :as closure]
             [cljs.analyzer :as ana]
@@ -91,13 +91,11 @@
                       (when (try
                               (let [[form s] (binding [*ns* (create-ns ana/*cljs-ns*)
                                                        reader/resolve-symbol ana/resolve-symbol
-                                                       reader/*data-readers* tags/*cljs-data-readers*
-                                                       reader/*alias-map*
-                                                       (apply merge
-                                                         ((juxt :requires :require-macros)
-                                                           (ana/get-namespace ana/*cljs-ns*)))]
-                                               (reader/read+string in-reader
-                                                 {:eof EOF :read-cond :allow :features #{:cljs}}))]
+                                                       reader/*data-readers* (merge tags/*cljs-data-readers*
+                                                                               (ana/load-data-readers))
+                                                       reader/*alias-map* (ana/get-aliases ana/*cljs-ns*)]
+                                               (reader/read+string {:eof EOF :read-cond :allow :features #{:cljs}}
+                                                 in-reader))]
                                 (try
                                   (when-not (identical? form EOF)
                                     (let [start (System/nanoTime)
@@ -118,11 +116,13 @@
                                         true)))
                                   (catch Throwable ex
                                     (out-fn {:tag :ret :val (Throwable->map ex)
-                                             :ns (name ana/*cljs-ns*) :form s})
+                                             :ns (name ana/*cljs-ns*) :form s
+                                             :exception true})
                                     true)))
                               (catch Throwable ex
                                 (out-fn {:tag :ret :val (Throwable->map ex)
-                                         :ns (name ana/*cljs-ns*)})
+                                         :ns (name ana/*cljs-ns*)
+                                         :exception true})
                                 true))
                         (recur)))
                     (finally
@@ -133,7 +133,7 @@
   "prepl bound to *in* and *out*, suitable for use with e.g. server/repl (socket-repl).
   :ret and :tap vals will be processed by valf, a fn of one argument
   or a symbol naming same (default identity)"
-  [& {:keys [valf repl-env opts] :or {valf identity}}]
+  [& {:keys [valf repl-env opts] :or {valf #(if (string? %) % (pr-str %))}}]
   (let [valf (resolve-fn valf)
         out *out*
         lock (Object.)]

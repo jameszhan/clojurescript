@@ -21,7 +21,8 @@
             [cljs.js :as cljs]
             [cljs.tools.reader :as reader]
             [cljs.stacktrace :as st]
-            [goog.object :as gobj]))
+            [goog.object :as gobj]
+            [self-parity.auxiliary]))
 
 (def out-dir "builds/out-self-parity")
 
@@ -29,6 +30,17 @@
                 "src/main/cljs"
                 "src/main/clojure"
                 "src/test/cljs"])
+
+(defn require*
+  [name reload]
+  (let [ret (js/CLOSURE_IMPORT_SCRIPT
+              (if goog/debugLoader_
+                (.getPathFromDeps_ goog/debugLoader_ name)
+                (gobj/get (.. js/goog -dependencies_ -nameToPath) name)))]
+    ;; handle requires from Closure Library goog.modules
+    (if (.isInModuleLoader_ js/goog)
+      (.getInternal_ (.. js/goog -module) name)
+      ret)))
 
 (defn init-runtime
   "Initializes the runtime so that we can use the cljs.user
@@ -39,12 +51,7 @@
   ;; monkey-patch isProvided_ to avoid useless warnings
   (js* "goog.isProvided_ = function(x) { return false; };")
   ;; monkey-patch goog.require, skip all the loaded checks
-  (set! (.-require js/goog)
-    (fn [name]
-      (js/CLOSURE_IMPORT_SCRIPT
-        (if goog/debugLoader_
-          (.getPathFromDeps_ goog/debugLoader_ name)
-          (gobj/get (.. js/goog -dependencies_ -nameToPath) name)))))
+  (set! (.-require js/goog) require*)
   ;; setup printing
   (nodejs/enable-util-print!)
   ;; redef goog.require to track loaded libs
@@ -53,10 +60,7 @@
     (fn [name reload]
       (when (or (not (contains? *loaded-libs* name)) reload)
         (set! *loaded-libs* (conj (or *loaded-libs* #{}) name))
-        (js/CLOSURE_IMPORT_SCRIPT
-          (if goog/debugLoader_
-            (.getPathFromDeps_ goog/debugLoader_ name)
-            (gobj/get (.. js/goog -dependencies_ -nameToPath) name)))))))
+        (require* name reload)))))
 
 ;; Node file reading fns
 
@@ -131,7 +135,7 @@
   using a supplied read-file-fn, calling back upon first successful
   read, otherwise calling back with nil. Before calling back, first
   attempts to read AOT artifacts (JavaScript and cache edn)."
-  [[filename & more-filenames] read-file-fn cb]
+  [[filename & more-filenames] macros read-file-fn cb]
   (if filename
     (read-file-fn
       filename
@@ -140,8 +144,9 @@
           (let [source-cb-value {:lang   (filename->lang filename)
                                  :file   filename
                                  :source source}]
-            (if (or (string/ends-with? filename ".cljs")
-                    (string/ends-with? filename ".cljc"))
+            (if (and (not macros)
+                     (or (string/ends-with? filename ".cljs")
+                         (string/ends-with? filename ".cljc")))
               (read-file-fn
                 (replace-extension filename ".js")
                 (fn [javascript-source]
@@ -156,7 +161,7 @@
                           (cb source-cb-value))))
                     (cb source-cb-value))))
               (cb source-cb-value)))
-          (read-some more-filenames read-file-fn cb))))
+          (read-some more-filenames macros read-file-fn cb))))
     (cb nil)))
 
 (defn filenames-to-try
@@ -176,7 +181,8 @@
   technical issues)."
   [name macros]
   ((if macros
-     #{'cljs.core}
+     #{'cljs.core
+       'cljs.repl}
      #{'goog.object
        'goog.string
        'goog.string.StringBuffer
@@ -187,17 +193,6 @@
        'cljs.tools.reader
        'clojure.walk}) name))
 
-;; An atom to keep track of things we've already loaded
-(def loaded (atom #{}))
-
-(defn load?
-  "Determines whether the given namespace should be loaded."
-  [name macros]
-  (let [do-not-load (or (@loaded [name macros])
-                        (skip-load? name macros))]
-    (swap! loaded conj [name macros])
-    (not do-not-load)))
-
 (defn make-load-fn
   "Makes a load function that will read from a sequence of src-paths
   using a supplied read-file-fn. It returns a cljs.js-compatible
@@ -207,10 +202,10 @@
   with the source of the library (as string)."
   [src-paths read-file-fn]
   (fn [{:keys [name macros path]} cb]
-    (if (load? name macros)
+    (if-not (skip-load? name macros)
       (if (re-matches #"^goog/.*" path)
         (load-goog name cb)
-        (read-some (filenames-to-try src-paths macros path) read-file-fn cb))
+        (read-some (filenames-to-try src-paths macros path) macros read-file-fn cb))
       (cb {:source ""
            :lang   :js}))))
 
@@ -285,9 +280,14 @@
                  [cljs.core-test :as core-test]
                  [cljs.reader-test]
                  [cljs.binding-test]
+                 [cljs.parse-test]
                  #_[cljs.ns-test]
+                 [clojure.set-test]
                  [clojure.string-test]
                  [clojure.data-test]
+                 [clojure.datafy-test]
+                 [clojure.edn]
+                 [clojure.math-test]
                  [clojure.walk-test]
                  [cljs.macro-test]
                  [cljs.letfn-test]
@@ -300,17 +300,22 @@
                  [cljs.pprint]
                  [cljs.pprint-test]
                  [cljs.spec-test]
+                 [cljs.specials-test]
                  [cljs.spec.test-test]
                  [cljs.clojure-alias-test]
                  [cljs.hash-map-test]
                  [cljs.map-entry-test]
                  [cljs.set-equiv-test]
                  [cljs.syntax-quote-test]
+                 [cljs.other-functions-test]
                  [cljs.predicates-test]
                  [cljs.test-test]
                  [static.core-test]
                  [cljs.recur-test]
                  [cljs.array-access-test]
+                 [cljs.inference-test]
+                 [cljs.walk-test]
+                 [cljs.repl-test]
                  [cljs.extend-to-native-test]))
     (fn [{:keys [value error]}]
       (if error
@@ -327,8 +332,13 @@
              'cljs.hashing-test
              'cljs.core-test
              'cljs.reader-test
+             'cljs.parse-test
+             'clojure.set-test
              'clojure.string-test
              'clojure.data-test
+             'clojure.datafy-test
+             'clojure.edn
+             'clojure.math-test
              'clojure.walk-test
              'cljs.letfn-test
              'cljs.reducers-test
@@ -343,17 +353,22 @@
              'cljs.pprint
              'cljs.pprint-test
              'cljs.spec-test
+             'cljs.specials-test
              'cljs.spec.test-test
              'cljs.clojure-alias-test
              'cljs.hash-map-test
              'cljs.map-entry-test
              'cljs.set-equiv-test
              'cljs.syntax-quote-test
+             'cljs.other-functions-test
              'cljs.predicates-test
              'cljs.test-test
              'static.core-test
              'cljs.recur-test
              'cljs.array-access-test
+             'cljs.inference-test
+             'cljs.walk-test
+             'cljs.repl-test
              'cljs.extend-to-native-test)
           (fn [{:keys [value error]}]
             (when error

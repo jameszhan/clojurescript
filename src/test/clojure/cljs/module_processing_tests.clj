@@ -1,3 +1,11 @@
+;; Copyright (c) Rich Hickey. All rights reserved.
+;; The use and distribution terms for this software are covered by the
+;; Eclipse Public License 1.0 (http://opensource.org/licenses/eclipse-1.0.php)
+;; which can be found in the file epl-v10.html at the root of this distribution.
+;; By using this software in any fashion, you are agreeing to be bound by
+;; the terms of this license.
+;; You must not remove this notice, or any other, from this software.
+
 (ns cljs.module-processing-tests
   (:require [clojure.java.io :as io]
             [cljs.closure :as closure]
@@ -15,11 +23,11 @@
 (defn preprocess-jsx [ijs _]
   (assoc ijs :source (clojure.string/replace
                        (:source ijs)
-                       (re-pattern (str "\\(\n"
-                                        "\\s*<svg width=\"200px\" height=\"200px\" className=\"center\">\n"
-                                        "\\s*<circle cx=\"100px\" cy=\"100px\" r=\"100px\" fill=\\{this.props.color\\}>\n"
-                                        "\\s*</circle>\n"
-                                        "\\s*</svg>\n"
+                       (re-pattern (str "\\(\\R"
+                                        "\\s*<svg width=\"200px\" height=\"200px\" className=\"center\">\\R"
+                                        "\\s*<circle cx=\"100px\" cy=\"100px\" r=\"100px\" fill=\\{this.props.color\\}>\\R"
+                                        "\\s*</circle>\\R"
+                                        "\\s*</svg>\\R"
                                         "\\s*\\)"))
                        (str " React.createElement(\"svg\", {width:\"200px\", height:\"200px\", className:\"center\"}, "
                             "React.createElement(\"circle\", {cx:\"100px\", cy:\"100px\", r:\"100px\", fill:this.props.color})"

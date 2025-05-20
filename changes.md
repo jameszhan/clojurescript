@@ -1,3 +1,422 @@
+## 1.12.42
+
+### Changes
+* Update Google Closure Compiler dependency to v20250402
+* Depend on Clojure fork of Google Closure Library, 0.0-20250515-f04e4c0e
+  - restores goog.dom.query
+  - restores goog.isString and other simple fns to goog.base that were unnecessarily removed
+  - restore debug loader as default
+  - remove unused Closure directive `unusedPrivateMembers`
+* CLJS-3290: implement IHash for js Symbol (#225)
+* Updated vendorized tools.reader to 1.4.2
+* CLJS-3419: JS Map & Set should return true for seqable?
+* CLJS-3421: Throw when calling ana-api/ns-publics on non-existing ns
+
+### Fixes
+* CLJS-3242: trailing keys bug
+* CLJS-2292: refer-clojure rename should also exclude
+* CLJS-3418: Some Closure libraries are not lowered
+* CLJS-3413: Macros not loaded w/ single segment namespace loaded via `:preloads`
+* CLJS-3411: cljs.core/test behavior does not match docstring (#226)
+* CLJS-3320: Compiler warning on trying to use `js` as an ns
+* remove unnecessary key-check for HashCollisionNode
+* CLJS-3429: Handle More Complex Closure Type Annotations
+
+## 1.11.132
+
+### Fixes
+* CLJS-3410: JavaScript double values should not hash to the same result
+* CLJS-3381: Invokable JS namespaces used as constructors not hinted properly
+* CLJS-3395: `(set! a -x false)` doesn't work
+* CLJS-3399: :as-alias does not work with symbols
+* CLJS-3401: dedupe '+ and '_PLUS symbols with :optimize-constants
+* CLJS-3400: macroexpand does not expand and and or without args correctly
+* CLJS-3398: Docstring of with-redefs should mention usage of ^:dynamic in production
+* CLJS-3386: defn varargs argument should be nil when no varargs are passed
+* CLJS-3384: get-in should not unreduce values.
+
+### Changes
+* CLJS-3378: Change default :language-in to :ecmascript-next
+* CLJS-3385: Extend empty? to counted? colls that arent seqable, such as transients
+* CLJS-3327 Add :node-modules-dirs configuration
+* CLJS-3391: add cljs.test/run-test
+* CLJS-3369: Speed up random-uuid by generating 4 digits at a time
+* CLJS-3014: Promote Error->map to be a core fn
+* CLJS-3394: Add ECMASCRIPT options for 2018-2021
+* CLJS-2268: Make clojure.string/escape consistent with Clojure
+* Bump closure lib to 2023 release
+* CLJS-3407: bump tools.reader to 1.3.7
+* remove EXPERIMENTAL from ES6 iterator support
+* CLJS-3406 implement reset-vals! and swap-vals! through protocol
+* CLJS-3363: reduce-kv on seq of map entries
+* CLJS-3393: Efficient drop, partition for persistent/algo colls
+* CLJS-3408: Handle @extends in externs
+* CLJS-3392: datafy support for js/Error and ExceptionInfo
+* CLJS-3379: Add support for node_modules with .cjs extension
+* CLJS-3387: Browser repl unable to serve wasm files
+
+## 1.11.60
+
+### Fixes
+* broaden scope of UUID equiv to implementers of protocol rather than concrete type
+* CLJS-3382: Fix regression in .apply after CLJS-3024
+
+## 1.11.57
+
+### Fixes
+* CLJS-3377: Objects created from required JS constructor are not correctly hinted
+* get-bridged-alias-map is not needed in self-hosted
+
+## 1.11.54
+
+### Changes
+* use `require` instead of `load` for `cljs.vendor.bridge`, addresses issue
+  reported by Bruce Hauman wrt. Figwheel
+
+## 1.11.51
+
+### Changes
+* CLJS-3372: Vendorize data.json, transit-clj, and tools.reader
+  data.json and transit-clj are no longer dependencies. CLJS-3375 bridges
+  tools.reader for backwards compatibility
+* Clojure 1.10 minimum version  
+* Update Google Closure Compiler, transit-java, tools.reader dependencies to latest
+* CLJS-2820 Compile cljs.loader regardless of whether :modules are used
+* CLJS-3370: improved uuid regex to only accept hex characters
+* Update / clarify docstrings, CLJS-3358, CLJS-3359, CLJS-3360, CLJS-3361, CLJS-3364
+* CLJS-3354: map-invert should use transients and reduce-kv instead of reduce
+* CLJS-3350: Update test.check dependency
+* CLJS-3294: data_readers.cljc doesn't provide a way to have target-specific
+  behaviour
+
+### Fixes
+* CLJS-3373: Externs Inference issue with vars invoked from foreign libs
+* CLJS-3368: let binding can shadow globals, leading to strange behavior
+* CLJS-3367: Backward conflict test in prefer-method causes incorrect exception
+* CLJS-3371: Invalid warning on record constructor
+* Fix apply of IFn for more than 20 arguments
+* CLJS-3288: selfhost: *eval-fn* not bound for :js sources
+* CLJS-3362: some-fn has different short-circuiting when using 3 predicates
+* CLJS-3356: halt-when not usable within #'c.c/into
+* CLJS-3352: Self-host negative zero emitted as positive zero
+* CLJS-3319: make PersistentHashMap release inodes correctly
+
+### Enhancements
+* CLJS-3348: Implement new functions for parity with Clojure 1.11
+* CLJS-3353: Add the new iteration function introduced in Clojure 1.11
+* CLJS-3347: Create clojure.math namespace
+* CLJS-3299: port CLJ-2603
+* CLJS-3346: :as-alias
+* add update-vals & update-keys
+
+## 1.11.4
+
+### Fixes
+* CLJS-3345: package.json exports can be a dupe of main
+
+## 1.10.914
+
+### Fixes
+* CLJS-3339: cljs.core/hash should type hint call to js/isFinite
+* CLJS-3333: defonce expansion non-hygienic with respect to core names
+* CLJS-3334: exists? evaluates to true for cljs.user//
+* CLJS-3341: Revert dependency issue in dep order patch
+
+### Changes
+* CLJS-3332: Cannot require `@firebase/auth`
+* CLJS-3335: CI, test-and-or-code-gen-pass fails on Windows
+* CLJS-3440: CI, Compiler tests fail test-cljs-3235 regarding react-select
+* CLJS-3342: Run CI compiler unit tests on Windows
+* CLJS-3338: Missing CI test coverage
+* CLJS-3343: Failing js module processing test on Windows
+
+## 1.10.896
+
+### Fixes
+* CLJS-3336: REGRESSION: Cannot require `goog`
+* CLJS-3337: REPL, Regression for :reload
+* Fix Windows path issue in cljs.externs
+
+## 1.10.891
+
+### Changes
+* Update Google Closure Compiler `v20210808`
+* Update Google Closure Library `0.0-20211011-0726fdeb`
+* CLJS-3330: Flag for legacy loading of goog.object & goog.array
+
+### Fixes
+* CLJS-3324: hash-map behavior differs from Clojure
+* CLJS-3056: runtime namespace load order is independent from ordering in ns macro :require form
+* CLJS-3074: Resolve :warning-handlers compiler option when symbols
+* CLJS-3317: PersistentVector invoke does not align with Clojure
+
+## 1.10.879
+
+### Changes
+* Revert CLJS-3276 - macros that expand to require
+
+### Fixes
+* CLJS-3096 Add :exception true to prepl errors
+* CLJS-3313: Protocol implementations via metadata: ClojureScript behaves differently from Clojure
+
+## 1.10.866
+
+### Changes
+* Google Closure v20210505
+
+### Enhancements
+* CLJS-3260: and/or optimization as compiler pass, fixes core.async go macro issue
+* CLJS-3276: Support macros that expand to require statements
+
+### Fixes
+* CLJS-3309: and/or opt bug - passes to remove dropped locals from anon fns,
+  missing :children keys on binding nodes
+* CLJS-3300: cljs.loader regression
+* CLJS-3293: Some npm packages fail to require
+* CLJS-3306: subvecs must implement IAssociative -contains-key?
+* CLJS-3307: Allow extending IAssociative -contains-key? to native
+* CLJS-3305: defrecord must implement IAssociative -contains-key?
+* CLJS-3303: checked arrays enabled in advanced
+* CLJS-3304: Higher order checked arrays
+* CLJS-3284: Use of private deftype by public function in another namespace when
+  inside an if causes warning
+* CLJS-3282: document bundle target in CLI help
+* CLJS-3283: Support -contains-key? protocol check in contains?
+* CLJS-3296: Update conj docstring for missing arities
+* CLJS-3298: visibility diagnostic group typo
+* CLJS-3302: Fixup docstring for `default-dispatch-val` and `dispatch-fn`
+
+## 1.10.844
+
+### Changes
+* Google Closure Compiler v20210302, Google Closure Library
+* Update to tools.reader 1.3.3
+
+### Enhancements
+* CLJS-3235: Support accessing a property of a library as a namespace itself
+
+### Fixes
+* CLJS-3287: selfhost: eval does not catch and return errors
+* CLJS-3263: Always print #inst year with 4 digits
+* CLJS-3291: Incorrect #inst parsing with respect to Julian / Gregorian calendar transition
+* CLJS-3281: CLI help for target missing comma
+* CLJ-3279: Error when :npm-deps is boolean and :install-deps true
+* CLJS-3275: compute upstream npm-deps when :npm-deps is not set
+* CLJS-3273: preserve ns-name when processing an :ns* op
+* CLJS-3200: reduce code generated by destructure macro for maps
+* CLJS-3271: nth on range produces nonexistent values considering floating point
+* CLJS-3261: Docstring for cljs.js/eval-str specifies incorrect default for :context
+* CLJS-2959: sort and sort-by should retain meta
+* CLJS-3255: cljs.build.api/build doesn't work with single arity / 2-arity with nil
+* CLJS-3019: Error->map should produce qualified symbols for :type
+* CLJS-3130: UUID compares equal to other values
+* CLJS-3257: `satisfies?` produces an inference warning when given an unhinted argument
+* add `:nodejs-rt` to the list of build affecting options
+* CLJS-2880: cl-format octal and Unicode character directives fail
+
+## 1.10.764
+
+### Fixes
+* Export Google Closure Library config directly to window in brwoser
+* CLI: If :main supplied to -c pass it along to -r
+* Revert CLJS-2582
+
+## 1.10.758
+
+### Changes
+* More useful functions added to cljs.analyzer.api
+
+### Fixes
+* CLJS-3242: Code Splitting Breakage
+* CLJS-3244: Warnings for clojure.browser.net with :static-fns true
+* Fix foreign-lib loading, was checking for `:nodejs` instead of `:nodejs-rt`
+* CLJS-3239: Infinite analysis with dotted symbols
+* CLJS-3238: Watch incompatible with :bundle, throws :nodejs-related exception
+* CLJS-3237: compiling with --target node errors at runtime with document undefined
+* CLJS-3236: defprotocol externs inference warnings
+* Fix (require ... :reload) REPL pattern
+
+## 1.10.741
+
+### Changes
+* Removed REPL/target support for Rhino, Nashorn, Graaljs
+* Update Closure Compiler and Google Closure Compiler dependencies
+* CLJS-1628: Make instances of js/Symbol printable
+
+### Enhancements
+* Add :target :bundle for integration with JavaScript bundlers (webpack, metro, etc.)
+* Add cljs.main --install-deps flag
+* Add :bundle-cmd compiler option for triggering JS bundler at end of build
+* Add :nodejs-rt compiler option to diable Node.js runtime support (for bundles)
+* Add :target-fn compiler option to allow users to support other targets outside of ClojureScript
+* Add :npm-cmd to allow users to choose `npm` or `yarn` for their dep tool
+* Make fast REPL prompt availble to 3rd party REPLs
+* Transpile GCL libraries that need it
+* Enhance cljs.main to be properly extensible
+* repl-env providing namespaces can now be arbitrary not limited to cljs.repl.*
+* CLJS-3185: Facilitate protocol static dispatch inlining
+* CLJS-3199: Interop with JavaScript's iterable objects via Iterator protocol
+
+### Fixes
+* CLJS-3230: seq on empty Iterable produces an empty seq
+* CLJS-2908: Don't show quick prompt if :verbose or :repl-verbose
+* CLJS-2898: cljs.main: ClojureScript version should not be displayed if there are inits
+* CLJS-2863: Need to reject incorrect fn with fixed arity of more params than variadic
+* CLJS-3086: Switch clj-nil to not be considered a numeric type
+* CLJS-3211: Widen cljs.core/defprotocol sig arguments from list to seq (to include Cons)
+* CLJS-712 & CLJS-2957: resolve-var for dot still wrong, externs inference regression
+* CLJS-2862: Externs inference warning when extending Object
+* CLJS-3161: Include :property for :warning-type :target
+* CLJS-3181: Externs inference fails, even when manual type hint is provided
+* CLJS-3224: Fix cljs.loader due to usage of removed setModuleUris API
+* CLJS-3223: get-js-index 0-arity should call get-js-index 1-arity
+* CLJS-3220: Self-host test-import failing on asserts.assert
+* CLJS-3218: NPE during Closure transpilation in self-host tests
+* CLJS-3217: script/test-self-parity compilation failure stale reference to goog.text.LoremIpsum
+* CLJS-3215: Travis has remnant CLI test involving GraalJS
+* CLJS-3219: Problem with asserts namespace inside goog.math.Long
+* CLJS-3119: get with negative ndx on string inconsistent with Clojure
+* CLJS-3214: script/uberjar fails with GraalJS
+* CLJS-3210: Single arity arithmetic ops don't warn on bad arguments
+* CLJS-3213: Browser REPL server hang when receive unknown POST
+* CLJS-3209: With clojurescript 1.10.597 HelloWorld compiled with to 94K of JS with advanced optimizations turned on
+* CLJS-3191: Optimize cljs.core/re-find
+* CLJS-3192: Optimize cljs.core/re-matches
+* CLJS-3193: Optimize cljs.core/re-pattern
+* CLJS-3202: Make :/ keyword hash consistent with =
+* CLJS-3203: Overriding root path in s/cat using s/gen gives an error
+
+## 1.10.597
+
+### Changes
+* CLJS-3120: Add :sigs to protocol var for compatibility with Clojure
+* CLJS-2247: Warn when overwriting protocol method
+* CLJS-3085: Types are inferred for dynamic vars
+* CLJS-3097: Fix compatibility with tools.reader 1.3.1 and bump it
+* CLJS-2750: tag coll in ci-reduce as not-native
+* CLJS-3095: `apply vector` with array acts as `vec`
+* CLJS-3093: Check subvec arguments
+* CLJS-2868: Add ^string hints
+* CLJS-3054: Align behavior of set/union and into with Clojure
+
+### Enhancements
+* CLJS-3077: Avoid generating unnecessary functions
+* CLJS-3107: Eliminate checked ifs in TransientArrayMap
+* CLJS-3164: Optimize assoc on IAssociative values
+* CLJS-3147: Allow Node require from foreign lib
+* CLJS-3144: NPM Modules should have all their vars marked to avoid .call invokes
+* CLJS-3145: Node.js support libs cljs.nodejs and cljs.nodejscli generate random files
+* CLJS-3141: Improve perf of cljs.source-map.base64/encode
+* CLJS-3134: Thread predicate-induced inference through and
+* CLJS-3123: analyze google closure namespaces
+* CLJS-3133: simple-* / qualified-* predicate-induced inference
+* CLJS-2886: count specializations for string and array
+* CLJS-2950: Direct field access for keyword lookup on records
+
+### Fixes
+* CLJS-3190: Double arity warning constructing directly-accessed record
+* CLJS-3137: fspec cannot be reused in clojurescript but can be in clojure
+* CLJS-3124: Non-number lookup on transient vector succeeds after persistent!
+* CLJS-3149: REPL load-file doesn't resolve npm requires correctly
+* CLJS-3163: Skip analyzing specials in type-check-induced-tag
+* CLJS-3172: Unable to import goog.async.ConditionalDelay
+* CLJS-3158: Improperly widened cross-param loop/recur inference
+* CLJS-3168: Self-host: externs ns used unconditionally in analyzer
+* CLJS-3140: Not inferring on implements?
+* CLJS-3143: assoc docstring regarding growing vector
+* CLJS-3123: 'for' loop silently ignores extra forms in body
+* CLJS-3017: Error->map: Map js/InternalError and js/TypeError
+* CLJS-2683: Suppress compiler options in watch log
+* CLJS-2881: cl-format character directive with \space fails
+* CLJS-2879: Close analysis cache file
+* CLJS-3051: Update to Graal RC12 in CI
+* CLJS-3088: Update CI to use JavaScriptCore 4
+* CLJS-3092: Peek on subvecs doesn't behave properly
+* CLJS-3076: let defined variadic functions not destructuring as expected with :static-fns true
+* CLJS-3067: Fix compiler crash when requiring cljs.loader w/o modules
+* CLJS-3068: Compiler error with if and emit-var
+* CLJS-2301: Avoid use of deprecated goog.string/isEmptySafe in clojure.string/blank?
+* CLJS-3058: Remove dangling goog.date.relativeWithPlurals reference
+* CLJS-3061 Fix docstring for chunked-seq?
+
+## 1.10.520
+
+### Changes
+* Browser REPL serves more mime types
+
+### Fixes
+* CLJS-3048: Revert CLJS-3038
+* CLJS-3049: Undefined fdef is still present in result of (stest/checkable-syms)
+
+## 1.10.516
+
+### Changes
+* CLJS-3036: Provide a clojure.edn namespace for Clojure compatibility
+* CLJS-2967: Make clojure.spec.alpha reloadable
+* CLJS-2968: Support immutable GCC DependencyOptions
+* CLJS-2693: Have Range implement IChunkedSeq
+* CLJS-2971: Make cljs.spec.alpha/fn-sym private
+* CLJS-2912: Reuse seq in some
+
+### Enhancements
+* CLJS-2865: Optimize string expression concatenation
+* CLJS-2866: Predicate-induced type inference
+* CLJS-2901: Return type inference for multi-arity & variadic fns
+
+### Fixes
+* CLJS-3043: error__GT_str not defined for cli scripts
+* CLJS-3037: Self-host: Add datafy tests to self-parity tests
+* CLJS-3031: loop / recur inference, warnings not suppressed on initial pass
+* CLJS-3030: Regression with core.async surrounding select-keys / find on String
+* CLJS-3038: Improve error message when clojure.test.check is not required
+* CLJS-3034: Truthy-induced inference
+* CLJS-3023: Instrumenting next gives maximum call stack size exceeded
+* CLJS-3033: Maintain backward compatibility test.check keyword
+* CLJS-2964: Requiring spec.test.alpha loads clojure.test.check
+* CLJS-2103: clarify arg type and order constraints of keys and vals
+* CLJS-3011: Port improved runtime exception printing to non-Node REPLs
+* CLJS-2981: Mishandling of :npm-deps Boolean value computing upstream deps
+* CLJS-3027: sorted-map can no longer be returned by a macro unless it has keyword keys
+* CLJS-3028: atom docstring typo
+* CLJS-2994 Ensure all prepl :vals are pr-str-ed
+* CLJS-3020: cljs.main: Incorrect documentation for the --compile flag
+* CLJS-2652: Line breaks in long options for compile
+* CLJS-3025: Typo when updating cljs.analyzer.macros/wrapping-errors
+* CLJS-2955: Self-host: spec check macro compile-time expansion
+* CLJS-2999: Update datafy to use inherent support for protocols via metadata
+* CLJS-2945: Print spec failure details
+* CLJS-3010: Datafy does not properly check for whether the datafied value supports metadata
+* CLJS-3008: Typo in error phase key placed in exception and misplaced cause
+* CLJS-2956: Stack overflow when specing core =
+* CLJS-2913: improvements to exception messages and printing
+* CLJS-3005: empty on Cons shouldn't keep metadata
+* CLJS-2958 - make symbol work on keywords and vars
+* CLJS-3000: Don't pass meta to next/rest/empty of seqs
+* Add support for protocols via metadata
+* CLJS-3000: Don't pass meta to next/rest/empty of seqs
+* CLJS-1888 - Seqs of PHMs and PAMs do not handle metadata correctly
+* CLJS-2794 :Return identity when with-meta is called with identical meta
+* CLJS-2980: Calling "check-fn" gives "is not public" warning
+* CLJS-2977: Spec instrumentation regression with varargs / :static-fns
+* CLJS-2929: Port datafy
+* CLJS-2995: Instrumented self-calling multi-arity fn throws maximum call stack exceeded with optimizations advanced
+* Fix source maps missing local binding names
+* CLJS-2991: Need to wrap js-obj output with parens
+* CLJS-2976: s/fdef docstring should refer to cljs.spec.test.alpha/check
+* CLJS-2538: nth on fractional indices near array and string bounds
+* CLJS-2909: clojure.walk/postwalk does not preserve MapEntry type objects
+* CLJS-2537: Negative fractional index in contains? on array
+* CLJS-2933: Consistent #object printing whitespace
+* CLJS-2873: Improved inference for loop / recur
+* CLJS-2989: Fast-path issues for predicate-induced inference based on satisfies?
+* CLJS-2867: Inferred return type of namespace is string
+* CLJS-2975: unstrument returns symbol of non-instrumented var
+* CLJS-2974: empty for non-emptyable should return nil
+* CLJS-2825: Eliminate unnecessary ^boolean annotations
+* CLJS-2979: re-seq is relying on undefined behavior of subs
+* remove redundant exists? check in dynaload
+* fix incorrect cljs.core.MapEntry usage
+
 ## 1.10.439
 
 ### Changes

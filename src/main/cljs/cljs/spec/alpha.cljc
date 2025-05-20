@@ -60,15 +60,28 @@
              (ana/resolve-var env s)))
     (symbol (str ana/*cljs-ns*) (str s))))
 
+(defonce ^:private _speced_vars (atom #{}))
+
+(defn speced-vars []
+  @_speced_vars)
+
 (defmacro def
   "Given a namespace-qualified keyword or resolveable symbol k, and a
   spec, spec-name, predicate or regex-op makes an entry in the
   registry mapping k to the spec. Use nil to remove an entry in
   the registry for k."
   [k spec-form]
-  (let [k    (if (symbol? k) (ns-qualify &env k) k)
+  (let [k    (if (symbol? k)
+               (let [sym (ns-qualify &env k)]
+                 (swap! _speced_vars conj
+                   (vary-meta sym assoc :fdef-ns (-> &env :ns :name)))
+                 sym)
+               k)
         form (res &env spec-form)]
-    (swap! registry-ref assoc k form)
+    (swap! registry-ref (fn [r]
+                          (if (nil? form)
+                            (dissoc r k)
+                            (assoc r k form))))
     `(def-impl '~k '~form ~spec-form)))
 
 (defmacro spec
@@ -400,11 +413,6 @@
   (clojure.core/assert (not (empty? preds)))
   `(tuple-impl '~(mapv #(res &env %) preds) ~(vec preds)))
 
-(def ^:private _speced_vars (atom #{}))
-
-(defn speced-vars []
-  @_speced_vars)
-
 (defmacro fdef
   "Takes a symbol naming a function, and one or more of the following:
 
@@ -418,10 +426,10 @@
 
   Qualifies fn-sym with resolve, or using *ns* if no resolution found.
   Registers an fspec in the global registry, where it can be retrieved
-  by calling get-spec with the var or full-qualified symbol.
+  by calling get-spec with the var or fully-qualified symbol.
 
   Once registered, function specs are included in doc, checked by
-  instrument, tested by the runner cljs.spec.test.alpha/run-tests, and (if
+  instrument, tested by the runner cljs.spec.test.alpha/check, and (if
   a macro) used to explain errors during macroexpansion.
 
   Note that :fn specs require the presence of :args and :ret specs to
@@ -438,9 +446,6 @@
                  :sym symbol?)
     :ret symbol?)"
   [fn-sym & specs]
-  (swap! _speced_vars conj
-    (vary-meta (ns-qualify &env fn-sym)
-      assoc :fdef-ns (-> &env :ns :name)))
   `(cljs.spec.alpha/def ~fn-sym (fspec ~@specs)))
 
 (defmacro keys*

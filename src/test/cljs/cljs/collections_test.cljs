@@ -9,6 +9,10 @@
 (ns cljs.collections-test
   (:refer-clojure :exclude [iter])
   (:require [cljs.test :refer-macros [deftest testing is are run-tests]]
+            [clojure.test.check :as tc]
+            [clojure.test.check.clojure-test :refer-macros [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop :include-macros true]
             [clojure.string :as s]
             [clojure.set :as set]))
 
@@ -43,6 +47,14 @@
     (is (= (find [1 2 3] 10) nil)))
   )
 
+(deftest test-map
+  (testing "IDrop"
+    (let [am (apply array-map (interleave (range 7) (range 7)))]
+      (is (satisfies? IDrop am))
+      (is (= [[3 3] [4 4] [5 5] [6 6]] (drop 3 am)))
+      (is (satisfies? IDrop (drop 3 am)))
+      (is (= [[5 5] [6 6]] (drop 2 (drop 3 am)))))))
+
 (deftest test-vectors
   (testing "Testing vectors"
     (is (= :a (nth [:a :b :c :d] 0)))
@@ -62,6 +74,16 @@
       (testing "stack operations"
         (is (= 95 (peek stack1)))
         (is (= 94 (peek stack2)))))
+    (testing "IDrop"
+      (is (satisfies? IDrop (vec (range 39))))
+      (is (= (range 3 39) (drop 3 (vec (range 39)))))
+      (is (= (range 31 39) (drop 31 (vec (range 39)))))
+      (is (= (range 32 39) (drop 32 (vec (range 39)))))
+      (is (= (range 33 39) (drop 33 (vec (range 39)))))
+      (is (satisfies? IDrop (drop 3 (vec (range 39)))))
+      (is (= (range 31 39) (drop 28 (drop 3 (vec (range 39))))))
+      (is (= (range 32 39) (drop 29 (drop 3 (vec (range 39))))))
+      (is (= (range 33 39) (drop 30 (drop 3 (vec (range 39)))))))
     (let [v1 (vec (range 10))
           v2 (vec (range 5))
           s (subvec v1 2 8)]
@@ -141,10 +163,18 @@
     (is (= #{1} (disj #{1 2 3} 2 3)))
     (is (nil? (disj nil :foo)))))
 
+(defspec integerrange-equals-range 100
+         (prop/for-all [start gen/int
+                        end gen/int
+                        step gen/s-pos-int]
+                       (= (Range. nil start end step nil nil nil)
+                          (IntegerRange. nil start end step nil nil nil))))
+
 (deftest test-range
   (testing "Testing Range"
     ;; Range
     (is (= (range 0 10 3) (list 0 3 6 9)))
+    (is (= (range 2.5) '(0 1 2)))
     (is (= (count (range 0 10 3)) 4))
     (is (= (range 0 -10 -3) (list 0 -3 -6 -9)))
     (is (= (count (range 0 -10 -3)) 4))
@@ -163,6 +193,50 @@
     (is (= (count (range 0 0 0)) 0))
     (is (= (take 3 (range 1 0 0)) (list 1 1 1)))
     (is (= (take 3 (range 3 1 0)) (list 3 3 3)))
+    (is (not (counted? (range))))
+    (is (counted? (range 0 10 1)))
+    (is (not (counted? (range 0.1 10 1))))
+    (is (chunked-seq? (range 0 10 1)))
+    (is (chunked-seq? (range 0.1 10 1)))
+    (is (= (range 0.5 8 1.2) '(0.5 1.7 2.9 4.1 5.3 6.5 7.7)))
+    (is (= (range 0.5 -4 -2) '(0.5 -1.5 -3.5)))
+    (testing "IDrop"
+      (is (satisfies? IDrop (range 10)))
+      (is (= [5 6 7 8 9] (drop 5 (range 10))))
+      (is (satisfies? IDrop (drop 5 (range 10))))
+      (is (= [8 9] (drop 3 (drop 5 (range 10))))))
+    (is (= (reduce + (range 0 100)) 4950))
+    (is (= (reduce + 0 (range 0 100)) 4950))
+    (is (= (reduce + (range 0.1 100)) 4960))
+    (is (= (reduce + 0 (range 0.1 100)) 4960))
+    (is (= (reduce + (map inc (range 0 100 1))) 5050))
+    (is (= (reduce + 0 (map inc (range 0 100 1))) 5050))
+    (is (= (reduce + (map inc (range 0 100 0.1))) 51051))
+    (is (= (reduce + 0 (map inc (range 0 100 0.1))) 51051))
+    (is (= (reduce + (range 0 3.1 0.1)) 46.500000000000014))
+    (is (= (reduce + 0 (range 0 3.1 0.1)) 46.500000000000014))
+    (is (= (reduce + (range 0 3.2 0.1)) 49.600000000000016))
+    (is (= (reduce + 0 (range 0 3.2 0.1)) 49.600000000000016))
+    (is (= (reduce + (range 0 3.3 0.1)) 52.80000000000002))
+    (is (= (reduce + 0 (range 0 3.3 0.1)) 52.80000000000002))
+    (is (= (reduce + (range 0 -3.1 -0.1)) -46.500000000000014))
+    (is (= (reduce + 0 (range 0 -3.1 -0.1)) -46.500000000000014))
+    (is (= (reduce + (range 0 -3.2 -0.1)) -49.600000000000016))
+    (is (= (reduce + 0 (range 0 -3.2 -0.1)) -49.600000000000016))
+    (is (= (reduce + (range 0 -3.3 -0.1)) -52.80000000000002))
+    (is (= (reduce + 0 (range 0 -3.3 -0.1)) -52.80000000000002))
+    (is (= (reduce + (map inc (range 0 3.1 0.1))) 77.50000000000001))
+    (is (= (reduce + 0 (map inc (range 0 3.1 0.1))) 77.50000000000001))
+    (is (= (reduce + (map inc (range 0 3.2 0.1))) 81.60000000000002))
+    (is (= (reduce + 0 (map inc (range 0 3.2 0.1))) 81.60000000000002))
+    (is (= (reduce + (map inc (range 0 3.3 0.1))) 85.80000000000003))
+    (is (= (reduce + 0 (map inc (range 0 3.3 0.1))) 85.80000000000003))
+    (is (= (reduce + (map inc (range 0 -3.1 -0.1))) -15.500000000000012))
+    (is (= (reduce + 0 (map inc (range 0 -3.1 -0.1))) -15.500000000000012))
+    (is (= (reduce + (map inc (range 0 -3.2 -0.1))) -17.600000000000016))
+    (is (= (reduce + 0 (map inc (range 0 -3.2 -0.1))) -17.600000000000016))
+    (is (= (reduce + (map inc (range 0 -3.3 -0.1))) -19.80000000000002))
+    (is (= (reduce + 0 (map inc (range 0 -3.3 -0.1))) -19.80000000000002))
     ))
 
 (deftest test-cycle
@@ -202,7 +276,7 @@
     (is (= -1 (.lastIndexOf (cycle []) 19 2)))
 
     (is (= {:a 1} (meta (with-meta (cycle [1 2 3]) {:a 1}))))
-    (is (= {:a 1} (meta (empty (with-meta (cycle [1 2 3]) {:a 1})))))
+    (is (nil? (meta (empty (with-meta (cycle [1 2 3]) {:a 1})))))
     (is (= (take 7 (with-meta (cycle [1 2 3]) {:a 1})) (take 7 (cycle [1 2 3]))))
 
     (is (realized? (cycle [1 2 3])))
@@ -291,12 +365,25 @@
     (is (= 3 (.lastIndexOf (repeat 7 5) 5 3)))
 
     (is (= {:a 1} (meta (with-meta (repeat 5 7) {:a 1}))))
-    (is (= {:a 1} (meta (empty (with-meta (repeat 5 7) {:a 1})))))
+    (is (nil? (meta (empty (with-meta (repeat 5 7) {:a 1})))))
     (is (= (with-meta (repeat 5 7) {:a 1}) (repeat 5 7)))
 
     (is (not (realized? (repeat 5 7))))
 
+    (is (= [1 1] (into [] (drop 98 (repeat 100 1)))))
     (is (= [1 1] (into [] (drop 98) (repeat 100 1))))
+    (is (= [1 1] (into [] (take 2 (drop 98 (repeat 1))))))
+
+    (is (= [1] (drop 0 (repeat 1 1))))
+    (is (= '(:a) (drop 1 (repeat 2 :a))))
+    (is (= () (drop 2 (repeat 2 :a))))
+    (is (= () (drop 3 (repeat 2 :a))))
+
+    (testing "IDrop"
+      (is (satisfies? IDrop (repeat 10 0)))
+      (is (= [0 0 0 0 0] (drop 5 (repeat 10 0))))
+      (is (satisfies? IDrop (drop 5 (repeat 10 0))))
+      (is (= [0 0] (drop 3 (drop 5 (repeat 10 0))))))
 
     (is (= () (empty (repeat 100 1))))
     (is (= () (empty (repeat 7))))
@@ -325,6 +412,16 @@
       2 [:x 1 1]
       3 [:x 1 1])))
 
+(deftest test-string
+  (testing "IDrop"
+    (is (satisfies? IDrop (seq "aaaaaaaaaa")))
+    (is (= [\a \a \a \a \a] (drop 5 "aaaaaaaaaa")))
+    (is (= [\a \a \a \a \a] (drop 5 (seq "aaaaaaaaaa"))))
+    (is (not (satisfies? IDrop (drop 5 "aaaaaaaaaa"))))
+    (is (satisfies? IDrop (drop 5 (seq "aaaaaaaaaa"))))
+    (is (= [\a \a] (drop 3 (drop 5 "aaaaaaaaaa"))))
+    (is (= [\a \a] (drop 3 (drop 5 (seq "aaaaaaaaaa")))))))
+
 (deftest test-iterate
   (testing "Testing Iterate"
     (are [x y] (= x y)
@@ -338,7 +435,7 @@
     (is (not (realized? (rest (iterate inc 0)))))
 
     (is (= {:a 1} (meta (with-meta (iterate inc 0) {:a 1}))))
-    (is (= {:a 1} (meta (empty (with-meta (iterate inc 0) {:a 1})))))
+    (is (nil? (meta (empty (with-meta (iterate inc 0) {:a 1})))))
     (is (= (take 20 (with-meta (iterate inc 0) {:a 1})) (take 20 (iterate inc 0))))
 
     (is (= [:first 0 1] (take 3 (conj (iterate inc 0) :first))))
@@ -385,6 +482,17 @@
     (split-at 0 [1 2 3]) [() (list 1 2 3)]
     (split-at -1 [1 2 3]) [() (list 1 2 3)]
     (split-at -5 [1 2 3]) [() (list 1 2 3)] ))
+
+(deftest test-splitv-at
+  (is (vector? (splitv-at 2 [])))
+  (is (vector? (first (splitv-at 2 []))))
+  (is (vector? (splitv-at 2 [1 2 3])))
+  (is (vector? (first (splitv-at 2 [1 2 3])))))
+
+(defspec splitv-at-equals-split-at 100
+  (prop/for-all [n gen/nat
+                 coll (gen/vector gen/nat)]
+    (= (splitv-at n coll) (split-at n coll))))
 
 (deftest test-rseq
   (testing "Testing RSeq"
@@ -1006,12 +1114,12 @@
 (deftest test-cljs-2442
   (testing "set ctor"
     (let [coll #{1 2}]
-      (is (not (identical? coll (set coll)))))
+      (is (identical? coll (set coll))))
     (is (= #{1 2} (set #{1 2})))
     (is (nil? (meta (set ^:a #{1 2})))))
   (testing "vec ctor"
     (let [coll [1 2]]
-      (is (not (identical? coll (vec coll)))))
+      (is (identical? coll (vec coll))))
     (is (= [1 2] (vec [1 2])))
     (is (nil? (meta (vec ^:a [1 2]))))
     (let [coll (vec (first {:a 1}))]
@@ -1023,6 +1131,37 @@
   (is (nil? (let [b (chunk-buffer 1)]
               (chunk-append b 0)
               (next (chunk-cons (chunk b) nil))))))
+
+(deftest test-cljs-3124
+  (let [t (assoc! (transient []) 0 1)]
+    (persistent! t)
+    (is (= :fail (try (get t :a :not-found) (catch js/Error e :fail))))))
+
+(deftest test-cljs-3317
+  (testing "persistent vector invoke matches clojure"
+    (is (thrown-with-msg? js/Error #"Key must be integer" ([1 2] nil)))))
+
+(deftest test-cljs-3324
+  (testing "hash-map behavior with missing values matches clojure"
+    (is (thrown-with-msg? js/Error #"No value supplied for key: :a"
+          (hash-map :a)))
+    (is (thrown-with-msg? js/Error #"No value supplied for key: :a"
+          (apply hash-map [:a])))))
+
+(deftest test-cljs-3393
+  (is (= '(0 2 4) (take 3 (filter even? (range 100000000))))))
+
+#_(deftest test-cljs-3420-lazy-seq-caching-bug
+  (testing "LazySeq should realize seq once"
+    (let [a (atom 0)
+          x (eduction (map (fn [_] (swap! a inc))) [nil])
+          l (lazy-seq x)]
+      (dotimes [_ 10]
+        (is (= [1] l))))))
+
+(deftest test-cljs-3240-overflow-regress
+  (let [things (zipmap (range 15000) (repeat 0))]
+    (is (zero? (count (filter #(-> % key string?) things))))))
 
 (comment
 

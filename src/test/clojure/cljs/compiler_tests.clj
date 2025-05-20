@@ -32,6 +32,17 @@
 (def aenv (assoc-in (ana/empty-env) [:ns :name] 'cljs.user))
 (def cenv (env/default-compiler-env))
 
+(defn compile-form-seq
+  ([forms]
+   (compile-form-seq forms
+     (when env/*compiler*
+       (:options @env/*compiler*))))
+  ([forms opts]
+   (with-out-str
+     (binding [ana/*cljs-ns* 'cljs.user]
+       (doseq [form forms]
+         (comp/emit (ana/analyze (ana/empty-env) form)))))))
+
 #_(deftest should-recompile
   (let [src (File. "test/hello.cljs")
         dst (File/createTempFile "compilertest" ".cljs")
@@ -281,8 +292,87 @@
       (is (re-find #"(?m)^.*var .*=.*inv_arg1.cljs.core.IFn._invoke.arity.0 \?.*$"
                    content))
       ;; CLJS-1871: A declare hinted with :arglists meta should result in static dispatch
-      (is (str/includes? content "cljs.invoke_test.declared_fn(")))))
+      (is (str/includes? content "cljs.invoke_test.declared_fn("))
+      ;; CLJS-2950: Direct field access for keyword lookup on records
+      (is (str/includes? content "cljs.invoke_test.foo_record.foo_field_a;")))))
 #_(test-vars [#'test-optimized-invoke-emit])
+
+(deftest test-cljs-3077
+  (let [opts {}
+        cenv (env/default-compiler-env opts)
+
+        test-compile
+        (fn [code]
+          (env/with-compiler-env cenv
+            (with-out-str
+              (emit
+                (comp/with-core-cljs
+                  opts
+                  (fn [] (analyze aenv code nil opts)))))))
+
+        snippet1
+        (test-compile
+          '(defn wrapper1 [foo]
+             (let [x 1]
+               (prn (fn inner [] foo))
+               (recur (inc foo)))))
+
+        snippet2
+        (test-compile
+          '(defn wrapper2 [foo]
+             (loop [x 1]
+               (prn (fn inner [] x))
+               (recur (inc x))
+               )))
+
+        snippet3
+        (test-compile
+          '(defn no-wrapper1 [foo]
+             (let [x 1]
+               (prn (fn inner [] foo)))))]
+
+    ;; FIXME: not exactly a clean way to test if function wrappers are created or not
+    ;; captures foo,x
+    (is (str/includes? snippet1 "(function (foo,x){"))
+    ;; captures x
+    (is (str/includes? snippet2 "(function (x){"))
+    ;; no capture, no loop or recur
+    (is (not (str/includes? snippet3 "(function (foo,x){")))
+    (is (not (str/includes? snippet3 "(function (foo){")))
+    (is (not (str/includes? snippet3 "(function (x){")))
+    ))
+
+(deftest test-goog-ctor-import-gen
+  (is (true? (str/includes?
+               (env/with-compiler-env (env/default-compiler-env)
+                 (compile-form-seq
+                   '[(ns test.foo
+                       (:import [goog.history Html5History]))
+                     (defn bar [] Html5History)]))
+               "return goog.history.Html5History;")))
+  (is (true? (str/includes?
+               (env/with-compiler-env (env/default-compiler-env)
+                 (compile-form-seq
+                   '[(ns test.foo
+                       (:import [goog.history Html5History]))
+                     (def hist (Html5History.))]))
+               "(new goog.history.Html5History());"))))
+
+(deftest emit-source-ns*-retains-ns-name ;; CLJS-3273
+  (let [input   (java.io.File/createTempFile "foo" ".cljs")
+        output  (java.io.File/createTempFile "foo" ".js")
+        _       (spit input "(ns foo.foo) (require 'clojure.string)")
+        ns-info (env/ensure (comp/emit-source input output "cljs" {}))]
+    (is (= 'foo.foo (:ns ns-info)))))
+
+(deftest test-3368-global-shadowing
+  (testing "Let binding which use JS global names should get shadowed"
+    (let [code (env/with-compiler-env (env/default-compiler-env)
+                 (compile-form-seq
+                   '[(defn foo []
+                       (let [window js/window]
+                         window))]))]
+      (is (re-find #"window__\$1" code)))))
 
 ;; CLJS-1225
 

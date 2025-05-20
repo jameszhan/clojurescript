@@ -15,7 +15,8 @@
             [cljs.test]
             [cljs.ns-test.foo :refer [baz]]
             [clojure.set :as s :refer [intersection] :rename {intersection itsc}]
-            [cljs.analyzer :as ana])
+            [cljs.analyzer :as ana]
+            [fake.ns :as-alias fake])
   (:use [cljs.ns-test.bar :only [quux]]))
 
 (def + -)
@@ -39,6 +40,15 @@
   (is (= (always-let [foo 42] foo) 42)))
 
 (deftest test-cljs-1677
-  (is (.isNumber js/goog 3))
-  (is (goog/isNumber 3))
-  (is (goog-alias/isNumber 3)))
+  (let [array-like #js {:length 3}]
+    (is (.isArrayLike js/goog array-like))
+    (is (goog/isArrayLike array-like))
+    (is (goog-alias/isArrayLike array-like))))
+
+(deftest test-cljs-3399
+  (is (= ::fake/foo :fake.ns/foo)
+  (is (= `fake/foo 'fake.ns/foo))))
+
+(deftest test-cljs-2292
+  (is (= false (exists? mapv)))
+  (is (= true (exists? core-mapv))))

@@ -8,7 +8,8 @@
 
 (ns cljs.test-util
   (:require [clojure.java.io :as io]
-            [clojure.string :as string])
+            [clojure.string :as string]
+            [clojure.test])
   (:import [java.io File]))
 
 (defn delete-out-files
@@ -69,3 +70,28 @@
   [lines]
   (with-out-str
     (run! println lines)))
+
+(defn equiv-modulo-newlines
+  "Returns whether strings are equivalent, disregarding differences in
+  embedded system-dependent newlines."
+  [s & more]
+  (== 1 (count (group-by string/split-lines (list* s more)))))
+
+(defmethod clojure.test/assert-expr 'thrown-with-cause-msg? [msg form]
+  ;; (is (thrown-with-cause-msg? c re expr))
+  ;; Asserts that evaluating expr throws an exception of class c.
+  ;; Also asserts that the message string of the *cause* exception matches
+  ;; (with re-find) the regular expression re.
+  (let [klass (nth form 1)
+        re    (nth form 2)
+        body  (nthnext form 3)]
+    `(try ~@body
+          (clojure.test/do-report {:type :fail, :message ~msg, :expected '~form, :actual nil})
+          (catch ~klass e#
+            (let [m# (if (.getCause e#) (.. e# getCause getMessage) (.getMessage e#))]
+              (if (re-find ~re m#)
+                (clojure.test/do-report {:type     :pass, :message ~msg,
+                                         :expected '~form, :actual e#})
+                (clojure.test/do-report {:type     :fail, :message ~msg,
+                                         :expected '~form, :actual e#})))
+            e#))))

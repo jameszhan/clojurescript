@@ -32,8 +32,12 @@
 (goog-define PORT 9000)
 
 (def ^:dynamic *repl* nil)
+
+;; these two defs are top-level so we can use them for printing
 (def xpc-connection (atom nil))
 (def parent-connected? (atom false))
+
+;; captures any printing that occurs *before* we actually have a connection
 (def print-queue (array))
 
 (defn flush-print-queue! [conn]
@@ -69,12 +73,7 @@
            :value (str (js* "eval(~{block})"))}
           (catch :default e
             {:status :exception
-             :ua-product (get-ua-product)
-             :value (str e)
-             :stacktrace
-             (if (.hasOwnProperty e "stack")
-               (.-stack e)
-               "No stacktrace available.")}))]
+             :value (cljs.repl/error->str e)}))]
     (pr-str result)))
 
 (defn send-result [connection url data]
@@ -104,20 +103,15 @@
      :order (swap! order inc)}))
 
 (defn start-evaluator
-  "Start the REPL server connection."
+  "Start the REPL server connection process. This process runs inside the
+  embedded iframe."
   [url]
   (if-let [repl-connection (net/xpc-connection)]
     (let [connection (net/xhr-connection)
           repl-connected? (atom false)
           try-handshake (fn try-handshake []
                           (when-not @repl-connected?
-                            (net/transmit repl-connection
-                                          :start-handshake
-                                          nil)
-                            ;; In case we miss, try again. Parent will only
-                            ;; ack once.
-                            (js/setTimeout try-handshake
-                                           10)))]
+                            (net/transmit repl-connection :start-handshake nil)))]
       (net/connect repl-connection try-handshake)
 
       (net/register-service repl-connection
@@ -129,6 +123,13 @@
             ;; the server.
             (send-result connection
               url (wrap-message nil :ready "ready")))))
+
+      (event/listen connection
+        :error
+        (fn [e]
+          (reset! repl-connected? false)
+          (net/transmit repl-connection :reconnect nil)
+          (js/setTimeout try-handshake 1000)))
 
       (event/listen connection
         :success
@@ -190,7 +191,7 @@
                 (gobj/set "onreadystatechange" onload)) ;; IE
               (if (nil? opt_sourceText)
                 (doto script (gobj/set "src" src))
-                (doto script (gdom/setTextContext opt_sourceText))))))))
+                (doto script (gdom/setTextContent opt_sourceText))))))))
     ;; queue or load
     (set! (.-writeScriptTag_ js/goog)
       (fn [src opt_sourceText]
@@ -211,10 +212,10 @@
       (fn [src reload]
         (when (= reload "reload-all")
           (set! (.-cljsReloadAll_ js/goog) true))
-        (let [reload? (or reload (.-cljsReloadAll__ js/goog))]
+        (let [reload? (or reload (.-cljsReloadAll_ js/goog))]
           (when reload?
             (if (some? goog/debugLoader_)
-              (let [path (.getPathFromDeps_ goog/debugLoader_ name)]
+              (let [path (.getPathFromDeps_ goog/debugLoader_ src)]
                 (gobj/remove (.-written_ goog/debugLoader_) path)
                 (gobj/remove (.-written_ goog/debugLoader_)
                   (str js/goog.basePath path)))
@@ -226,7 +227,10 @@
           (let [ret (.require__ js/goog src)]
             (when (= reload "reload-all")
               (set! (.-cljsReloadAll_ js/goog) false))
-            ret))))))
+            ;; handle requires from Closure Library goog.modules
+            (if (js/goog.isInModuleLoader_)
+              (js/goog.module.getInternal_ src)
+              ret)))))))
 
 (defn connect
   "Connects to a REPL server from an HTML document. After the
@@ -234,9 +238,7 @@
   the document that called this function."
   [repl-server-url]
   (let [connected? (atom false)
-        repl-connection
-        (net/xpc-connection
-          {:peer_uri repl-server-url})]
+        repl-connection (net/xpc-connection {:peer_uri repl-server-url})]
     (swap! xpc-connection (constantly repl-connection))
     (net/register-service repl-connection
       :start-handshake
@@ -246,10 +248,13 @@
         (when-not @connected?
           (reset! connected? true)
           (reset! parent-connected? true)
-          (net/transmit repl-connection
-                        :ack-handshake
-                        nil)
+          (net/transmit repl-connection :ack-handshake nil)
           (flush-print-queue! repl-connection))))
+    (net/register-service repl-connection
+      :reconnect
+      (fn [_]
+        (reset! connected? false)
+        (reset! parent-connected? false)))
     (net/register-service repl-connection
       :evaluate-javascript
       (fn [json]

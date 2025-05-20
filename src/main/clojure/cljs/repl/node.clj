@@ -13,9 +13,10 @@
             [cljs.analyzer :as ana]
             [cljs.compiler :as comp]
             [cljs.repl :as repl]
+            [cljs.repl.bootstrap :as bootstrap]
             [cljs.cli :as cli]
             [cljs.closure :as closure]
-            [clojure.data.json :as json])
+            [cljs.vendor.clojure.data.json :as json])
   (:import [java.net Socket]
            [java.lang StringBuilder]
            [java.io File BufferedReader BufferedWriter IOException]
@@ -166,20 +167,22 @@
                                      (closure/src-file->target-file
                                        core (dissoc opts :output-dir))))
                deps    (closure/add-dependencies opts core-js)]
-           ;; output unoptimized code and the deps file
-           ;; for all compiled namespaces
+           ;; output unoptimized code and only the deps file for all compiled
+           ;; namespaces, we don't need the bootstrap target file
            (apply closure/output-unoptimized
-             (assoc opts
+             (assoc (assoc opts :target :none)
                :output-to (.getPath (io/file output-dir "node_repl_deps.js")))
              deps))
          ;; bootstrap, replace __dirname as __dirname won't be set
          ;; properly due to how we are running it - David
          (node-eval repl-env
            (-> (slurp (io/resource "cljs/bootstrap_nodejs.js"))
-             (string/replace "path.resolve(__dirname, '..', 'base.js')"
+             (string/replace "path.resolve(__dirname, \"..\", \"base.js\")"
                (platform-path (conj rewrite-path "bootstrap" ".." "base.js")))
              (string/replace
                "path.join(\".\", \"..\", src)"
+               (str "path.join(" (platform-path rewrite-path) ", src)"))
+             (string/replace "path.resolve(__dirname, \"..\", src)"
                (str "path.join(" (platform-path rewrite-path) ", src)"))
              (string/replace
                "var CLJS_ROOT = \".\";"
@@ -189,35 +192,12 @@
            (str "require("
              (platform-path (conj root-path "node_repl_deps.js"))
              ")"))
-         ;; monkey-patch isProvided_ to avoid useless warnings - David
-         (node-eval repl-env
-           (str "goog.isProvided_ = function(x) { return false; };"))
-         ;; monkey-patch goog.require, skip all the loaded checks
-         (repl/evaluate-form repl-env env "<cljs repl>"
-           '(set! (.-require js/goog)
-              (fn [name]
-                (js/CLOSURE_IMPORT_SCRIPT
-                  (if (some? goog/debugLoader_)
-                    (.getPathFromDeps_ goog/debugLoader_ name)
-                    (unchecked-get (.. js/goog -dependencies_ -nameToPath) name))))))
          ;; load cljs.core, setup printing
          (repl/evaluate-form repl-env env "<cljs repl>"
            '(do
               (.require js/goog "cljs.core")
               (enable-console-print!)))
-         ;; redef goog.require to track loaded libs
-         (repl/evaluate-form repl-env env "<cljs repl>"
-           '(do
-              (set! *target* "nodejs")
-              (set! *loaded-libs* #{"cljs.core"})
-              (set! (.-require js/goog)
-                (fn [name reload]
-                  (when (or (not (contains? *loaded-libs* name)) reload)
-                    (set! *loaded-libs* (conj (or *loaded-libs* #{}) name))
-                    (js/CLOSURE_IMPORT_SCRIPT
-                      (if (some? goog/debugLoader_)
-                        (.getPathFromDeps_ goog/debugLoader_ name)
-                        (unchecked-get (.. js/goog -dependencies_ -nameToPath) name))))))))
+         (bootstrap/install-repl-goog-require repl-env env)
          (node-eval repl-env
            (str "goog.global.CLOSURE_UNCOMPILED_DEFINES = "
              (json/write-str (:closure-defines opts)) ";")))))

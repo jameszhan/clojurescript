@@ -124,18 +124,10 @@ Get-WebResource `
 
 Write-Host "Fetching Google Closure compiler..."
 Get-WebResource `
-    http://repo1.maven.org/maven2/com/google/javascript/closure-compiler/v$CLOSURE_RELEASE/closure-compiler-v$CLOSURE_RELEASE.jar `
+    https://repo1.maven.org/maven2/com/google/javascript/closure-compiler/v$CLOSURE_RELEASE/closure-compiler-v$CLOSURE_RELEASE.jar `
     $root\closure-compiler-v$CLOSURE_RELEASE.jar
 Copy-File $root\closure-compiler-v$CLOSURE_RELEASE.jar $root\lib\compiler.jar
 Delete-File $root\closure-compiler-v$CLOSURE_RELEASE.jar
-
-Write-Host "Fetching Rhino..."
-Get-WebResource `
-    https://github.com/mozilla/rhino/releases/download/Rhino${RHINO_RELEASE}_RELEASE/rhino$RHINO_RELEASE.zip `
-    $root\rhino$RHINO_RELEASE.zip
-Delete-File $root\lib\js.jar
-Expand-ZipFile $root\rhino$RHINO_RELEASE.zip $root\lib rhino$RHINO_RELEASE\js.jar
-Delete-File $root\rhino$RHINO_RELEASE.zip
 
 Write-Host "Fetching tools.reader $TREADER_RELEASE ..."
 Get-WebResource `

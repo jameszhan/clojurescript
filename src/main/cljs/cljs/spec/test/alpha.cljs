@@ -15,9 +15,7 @@
     [cljs.stacktrace :as st]
     [cljs.pprint :as pp]
     [cljs.spec.alpha :as s]
-    [cljs.spec.gen.alpha :as gen]
-    [clojure.test.check :as stc]
-    [clojure.test.check.properties]))
+    [cljs.spec.gen.alpha :as gen]))
 
 (defn distinct-by
   ([f coll]
@@ -87,6 +85,7 @@
 (defn- spec-checking-fn
   [v f fn-spec]
   (let [fn-spec (@#'s/maybe-spec fn-spec)
+        args-spec (:args fn-spec)
         conform! (fn [v role spec data args]
                    (let [conformed (s/conform spec data)]
                      (if (= ::s/invalid conformed)
@@ -112,19 +111,27 @@
                           pure-variadic?)
                    (.cljs$core$IFn$_invoke$arity$variadic f)
                    (apply f args)))
-        ret (fn [& args]
-              (if *instrument-enabled*
-                (with-instrument-disabled
-                  (when (:args fn-spec) (conform! v :args (:args fn-spec) args args))
-                  (binding [*instrument-enabled* true]
-                    (apply' f args)))
-                (apply' f args)))]
-    (when-not pure-variadic?
-      (setup-static-dispatches f ret 20)
+        conform!* #(conform! v :args args-spec % %)
+        ret (if args-spec
+              (fn [& args]
+                (if *instrument-enabled*
+                  (with-instrument-disabled
+                    (conform!* args)
+                    (binding [*instrument-enabled* true]
+                      (apply' f args)))
+                  (apply' f args)))
+              f)]
+    (when (and (not pure-variadic?) args-spec)
+      (setup-static-dispatches f ret conform!* 20)
       (when-some [variadic (.-cljs$core$IFn$_invoke$arity$variadic f)]
         (set! (.-cljs$core$IFn$_invoke$arity$variadic ret)
           (fn [& args]
-            (apply variadic args)))))
+            (if *instrument-enabled*
+              (with-instrument-disabled
+                (conform!* (apply list* args))
+                (binding [*instrument-enabled* true]
+                  (apply' variadic args)))
+              (apply' variadic args))))))
     ret))
 
 (defn- no-fspec
@@ -219,7 +226,7 @@ with explain-data + ::s/failure."
             true))))))
 
 (defn- quick-check
-  [f specs {gen :gen opts ::stc/opts}]
+  [f specs {gen :gen opts :clojure.spec.test.check/opts}]
   (let [{:keys [num-tests] :or {num-tests 1000}} opts
         g (try (s/gen (:args specs) gen) (catch js/Error t t))]
     (if (instance? js/Error g)
@@ -229,9 +236,9 @@ with explain-data + ::s/failure."
 
 (defn- make-check-result
   "Builds spec result map."
-  [check-sym spec test-check-ret]
+  [check-sym spec test-check-ret tc-ret-key]
   (merge {:spec spec
-          ::stc/ret test-check-ret}
+          tc-ret-key test-check-ret}
     (when check-sym
       {:sym check-sym})
     (when-let [result (-> test-check-ret :result)]
@@ -239,7 +246,7 @@ with explain-data + ::s/failure."
     (when-let [shrunk (-> test-check-ret :shrunk)]
       {:failure (:result shrunk)})))
 
-(defn- validate-check-opts
+(defn validate-check-opts
   [opts]
   (assert (every? ident? (keys (:gen opts))) "check :gen expects ident keys"))
 
@@ -273,10 +280,10 @@ with explain-data + ::s/failure."
 suitable for summary use."
   [x]
   (if (:failure x)
-    (-> (dissoc x ::stc/ret)
+    (-> (dissoc x :clojure.spec.test.check/ret)
       (update :spec s/describe)
       (update :failure unwrap-failure))
-    (dissoc x :spec ::stc/ret)))
+    (dissoc x :spec :clojure.spec.test.check/opts)))
 
 (defn summarize-results
   "Given a collection of check-results, e.g. from 'check', pretty

@@ -84,7 +84,14 @@
     (is (not (contains? (to-array [5 6 7]) 3)))
     (is (not (contains? nil 42)))
     (is (contains? "f" 0))
-    (is (not (contains? "f" 55)))))
+    (is (not (contains? "f" 55))))
+
+  (testing "Testing contains? with IAssociative protocol"
+    (let [ds (reify
+               IAssociative
+               (-contains-key? [_ k] (= k :valid)))]
+     (is (contains? ds :valid))
+     (is (not (contains? ds :invalid))))))
 
 (deftest test-run!
   (testing "Testing run!"
@@ -120,6 +127,8 @@
     (is (= 1 (get-in {:foo 1 :bar 2} [:foo])))
     (is (= 2 (get-in {:foo {:bar 2}} [:foo :bar])))
     (is (= 1 (get-in [{:foo 1}, {:foo 2}] [0 :foo])))
+    (let [v (reduced 42)]
+      (is (= v (get-in {:foo v} [:foo]))))
     (is (= 4 (get-in [{:foo 1 :bar [{:baz 1}, {:buzz 2}]}, {:foo 3 :bar [{:baz 3}, {:buzz 4}]}]
                [1 :bar 1 :buzz]))))
   )
@@ -146,9 +155,9 @@
       (is (= (clj->js 1) 1))
       (is (= (clj->js nil) (js* "null")))
       (is (= (clj->js true) (js* "true")))
-      (is (goog/isArray (clj->js [])))
-      (is (goog/isArray (clj->js #{})))
-      (is (goog/isArray (clj->js '())))
+      (is (goog/typeOf "array" (clj->js [])))
+      (is (goog/typeOf "array" (clj->js #{})))
+      (is (goog/typeOf "array" (clj->js '())))
       (is (goog/isObject (clj->js {})))
       (is (= (gobject/get (clj->js {:a 1}) "a") 1))
       (is (= (-> (clj->js {:a {:b {{:k :ey} :d}}})
@@ -305,6 +314,16 @@
       (is (= :parent (multi-with-h :child)))
 )))
 
+(def tmph (make-hierarchy))
+(defmulti fooz (fn [a b] (keyword b)) :hierarchy #'tmph)
+(defmethod fooz :a [a b] a)
+(defmethod fooz :b [a b] b)
+(prefer-method fooz :a :b)
+
+(deftest test-cljs-3367-backward-conflict-prefers
+  (testing "CLJS-3367: Verify no backward conflict in prefer-method"
+    (is (some? (prefer-method fooz :a :b)))))
+
 (deftest test-transducers
   (testing "Testing transducers"
     (is (= (sequence (map inc) (array 1 2 3)) '(2 3 4)))
@@ -379,6 +398,15 @@
       (is (= (sequence xf [1 2 3]) [1 2 3 :foo]))))
   (testing "CLJS-2258"
     (is (= ["1"] (sequence (map str) (eduction [1]))))))
+
+(deftest test-into+halt-when
+  (is (= :anomaly (into [] (comp (filter some?) (halt-when #{:anomaly}))
+                    [1 2 3 :anomaly 4])))
+  (is (= {:anomaly         :oh-no!,
+          :partial-results [1 2]}
+        (into []
+          (halt-when :anomaly #(assoc %2 :partial-results %1))
+          [1 2 {:anomaly :oh-no!} 3 4]))))
 
 (deftest test-obj-equiv
   (testing "Object equiv method"
@@ -621,16 +649,6 @@
   (is (= (meta (with-meta (reify IFoo (foo [this] :foo)) {:foo :bar}))
             {:foo :bar})))
 
-
-(defprotocol Slashy (/ [_]))
-
-(extend-type string
-       Slashy
-       (/ [_] "result"))
-
-(deftest test-protocol-with-slash
-  (is (=  "result" (/ ""))))
-
 (let [x "original"]
   (defn original-closure-stmt [] x))
 
@@ -683,6 +701,59 @@
   (is (= (.toString (ex-info "abc" {:x 1} "def")) "#error {:message \"abc\", :data {:x 1}, :cause \"def\"}"))
   (is (= (str (ex-info "abc" {:x 1} "def")) "#error {:message \"abc\", :data {:x 1}, :cause \"def\"}"))
   (is (not (instance? cljs.core.ExceptionInfo (js/Error.)))))
+
+(deftest test-Throwable->map
+  (let [msg-0  "message-0"
+        data-0 {:a 0}
+        msg-1  "message-1"
+        data-1 {:b 1}
+        msg-2  "message-2"]
+    ;; Check ex-info style error
+    (let [ex (ex-info msg-0 data-0)
+          m  (Throwable->map ex)]
+      (is (= msg-0 (:cause m)))
+      (is (= data-0 (:data m)))
+      (is (nil? (:trace m)))
+      (let [via (:via m)]
+        (is (== 1 (count via)))
+        ;; Check via 0
+        (is (= `ExceptionInfo (:type (nth via 0))))
+        (is (= msg-0 (:message (nth via 0))))
+        (is (= data-0 (:data (nth via 0))))))
+    ;; Check plain js/Error style error
+    (let [ex (js/Error. msg-0)
+          m  (Throwable->map ex)]
+      (is (= msg-0 (:cause m)))
+      (is (nil? (:data m)))
+      (is (nil? (:trace m)))
+      (let [via (:via m)]
+        (is (== 1 (count via)))
+        ;; Check via 0
+        (is (= 'js/Error (:type (nth via 0))))
+        (is (= msg-0 (:message (nth via 0))))
+        (is (nil? (:data (nth via 0))))))
+    ;; Check ex-info style with chain ending in js/Error
+    (let [ex (ex-info msg-0 data-0
+               (ex-info msg-1 data-1
+                 (js/Error. msg-2)))
+          m  (Throwable->map ex)]
+      (is (= msg-2 (:cause m)))
+      (is (nil? (:data m)))
+      (is (nil? (:trace m)))
+      (let [via (:via m)]
+        (is (== 3 (count via)))
+        ;; Check via 0
+        (is (= `ExceptionInfo (:type (nth via 0))))
+        (is (= msg-0 (:message (nth via 0))))
+        (is (= data-0 (:data (nth via 0))))
+        ;; Check via 1
+        (is (= `ExceptionInfo (:type (nth via 1))))
+        (is (= msg-1 (:message (nth via 1))))
+        (is (= data-1 (:data (nth via 1))))
+        ;; Check via 2
+        (is (= 'js/Error (:type (nth via 2))))
+        (is (= msg-2 (:message (nth via 2))))
+        (is (nil? (:data (nth via 2))))))))
 
 (deftest test-2067
   (is (= 0 (reduce-kv
@@ -957,6 +1028,10 @@
       (is (every? #(= :failed (try (re-find #"nomatch" %)
                                    (catch js/TypeError _ :failed))) not-strings))
       (is (every? #(= :failed (try (re-matches #"nomatch" %)
+                                   (catch js/TypeError _ :failed))) not-strings))
+      (is (every? #(= :failed (try (re-seq #"." %)
+                                   (catch js/TypeError _ :failed))) not-strings))
+      (is (every? #(= :failed (try (re-seq #"nomatch" %)
                                    (catch js/TypeError _ :failed))) not-strings)))))
 
 (deftest test-853
@@ -1120,8 +1195,8 @@
     (is (nil? (seq xs)))
     (is (= (rest xs) ()))
     (is (= (pr-str xs) "()"))
-    (is (= (foo-1284 0) [0 ()]))
-    (is (= (pr-str (foo-1284 0)) "[0 ()]"))
+    (is (= (foo-1284 0) [0 nil]))
+    (is (= (pr-str (foo-1284 0)) "[0 nil]"))
     (is (zero? (count ys)))
     (is (= (transduce (map inc) conj [] ys) []))))
 
@@ -1281,8 +1356,8 @@
            [5 4]))
     (is (= (transduce (halt-when #{1} (fn [ret input] (conj ret input))) conj [] [5 4 1 2 3])
            [5 4 1]))
-    (is (= (into [] (halt-when #{1} (fn [ret in] (conj! ret in)))  [2 3 1]))
-        [2 3 1])))
+    (is (= (into [] (halt-when #{1} (fn [ret in] (conj ret in))) [2 3 1])
+          [2 3 1]))))
 
 (deftest test-cljs-1839
   (let [x #js {:foo (fn [])}
@@ -1533,6 +1608,46 @@
 (deftest test-cljs-2457
   (is (thrown-with-msg? js/Error #".* is not ISeqable" (seq #js {:a 1 :b 2}))))
 
+(deftest test-cljs-2537
+  (is (true?  (contains? (to-array [7 13 41]) -0.5)))
+  (is (== 7 (get (to-array [7 13 41]) -0.5)))
+  (is (== 7 (get (to-array [7 13 41]) -0.5 :not-found)))
+  (is (true? (contains? "ab" -0.5)))
+  (is (= \a (get "ab" -0.5)))
+  (is (= \a (get "ab" -0.5 :not-found))))
+
+(deftest test-cljs-2538
+  (testing "fractional indices in nth on arrays"
+    (is (thrown-with-msg? js/Error #"Index out of bounds" (nth (to-array [1 2]) -1)))
+    (is (= :not-found (nth (to-array [1 2]) -1 :not-found)))
+    (is (== 1 (nth (to-array [1 2]) -0.5)))
+    (is (== 1 (nth (to-array [1 2]) -0.5 :not-found)))
+    (is (== 1 (nth (to-array [1 2]) 0)))
+    (is (== 1 (nth (to-array [1 2]) 0 :not-found)))
+    (is (== 1 (nth (to-array [1 2]) 0.5)))
+    (is (== 1 (nth (to-array [1 2]) 0.5 :not-found)))
+    (is (== 2 (nth (to-array [1 2]) 1)))
+    (is (== 2 (nth (to-array [1 2]) 1 :not-found)))
+    (is (== 2 (nth (to-array [1 2]) 1.5)))
+    (is (== 2 (nth (to-array [1 2]) 1.5 :not-found)))
+    (is (thrown-with-msg? js/Error #"Index out of bounds" (nth (to-array [1 2]) 2)))
+    (is (= :not-found (nth (to-array [1 2]) 2 :not-found))))
+  (testing "fractional indices in nth on strings"
+    (is (thrown-with-msg? js/Error #"Index out of bounds" (nth "ab" -1)))
+    (is (= :not-found (nth "ab" -1 :not-found)))
+    (is (== \a (nth "ab" -0.5)))
+    (is (== \a (nth "ab" -0.5 :not-found)))
+    (is (== \a (nth "ab" 0)))
+    (is (== \a (nth "ab" 0 :not-found)))
+    (is (== \a (nth "ab" 0.5)))
+    (is (== \a (nth "ab" 0.5 :not-found)))
+    (is (== \b (nth "ab" 1)))
+    (is (== \b (nth "ab" 1 :not-found)))
+    (is (== \b (nth "ab" 1.5)))
+    (is (== \b (nth "ab" 1.5 :not-found)))
+    (is (thrown-with-msg? js/Error #"Index out of bounds" (nth "ab" 2)))
+    (is (= :not-found (nth "ab" 2 :not-found)))))
+
 (deftest test-cljs-2549
   (let [tap (fn [_])]
     (add-tap tap)
@@ -1554,6 +1669,22 @@
   (is (= true ((or int? string?) 1)))
   ;; Make sure we didn't delete the alpha? fn
   (is (some? alpha-2585?)))
+
+(deftest test-cljs-2693
+  (is (chunked-seq? (range 5)))
+  (is (satisfies? IChunk (chunk-first (range 5))))
+  (is (nil? (chunk-next (range 32))))
+  (is (not (chunked-seq? (range 2 -2 0))))
+  (is (chunked-seq? (range)))
+  (is (= 5 (count (chunk-first (range 5)))))
+  (is (= 32 (count (chunk-first (range)))))
+  (is (= 17 (nth (chunk-first (range 100)) 17)))
+  (is (= 35 (nth (chunk-first (range 100)) 35)))
+  (is (= 32 (count (chunk-first (range 100)))))
+  (is (= 0 (first (range 5))))
+  (is (= 1 (second (range 5))))
+  (is (= (range 1 5) (rest (range 5))))
+  (is (= (range 1 5) (next (range 5)))))
 
 (defn fn-2741* ([x]) ([x y]))
 (def fn-2741 fn-2741*)
@@ -1633,6 +1764,23 @@
   (is (= "xyzzy" (str "x" "y" "z" "z" "y")))
   (is (= "a1b2c3" (str "a" 1 "b" 2 "c" 3))))
 
+(defn str-fn-2865 []
+  "hello")
+
+(deftest test-cljs-2865
+  (is (= "ab" (str "a" (let [x true] (when x "b")))))
+  (is (= "ab" (str "a" js/undefined "b")))
+  (is (= "ab" (str "a" nil "b")))
+  (is (= "ahellob" (str "a" (str-fn-2865) "b"))))
+
+(deftest test-cljs-2886
+  (is (zero? (count "")))
+  (is (== 1 (count "a")))
+  (is (zero? (count #js [])))
+  (is (== 1 (count #js [1])))
+  (is (zero? (count [])))
+  (is (== 1 (count [1]))))
+
 (deftest test-cljs-2934
   (let [x (delay 1)]
     (is (= "#object[cljs.core.Delay {:status :pending, :val nil}]" (pr-str x)))
@@ -1650,3 +1798,261 @@
     (is (= m4 (merge-with + (sorted m1) (sorted m2) m3)))
     (is (= m4 (merge-with + m1 (sorted m2) m3)))
     (is (= m4 (merge-with + m1 (sorted m2) (sorted m3))))))
+
+(deftest test-cljs-2933
+  (is (= "#object[cljs.core.Atom {:val 1}]" (pr-str (atom 1))))
+  (is (= "#object[cljs.core.Volatile {:val 2}]" (pr-str (volatile! 2)))))
+
+(deftest test-cljs-2944
+  (is (= (symbol :foo/bar) 'foo/bar))
+  (is (= (symbol (->Var nil 'bar/foo nil)) 'bar/foo))
+  (is (thrown? js/Error (symbol 1))))
+
+(deftest test-cljs-2959
+  (is (= {:a true} (meta (sort (with-meta (range 10) {:a true})))))
+  (is (= {:a true} (meta (sort-by :a (with-meta (seq [{:a 5} {:a 2} {:a 3}]) {:a true}))))))
+
+(deftest test-cljs-2991
+  (let [o (js-obj)]
+    (is (object? o))
+    (is (empty? (js-keys o))))
+  (let [o (js-obj "a" 17)]
+    (is (object? o))
+    (is (== 1 (count (js-keys o))))
+    (is (= "a" (aget (js-keys o) 0)))
+    (is (== 17 (gobject/get o "a"))))
+  (let [o (js-obj "a" 17 "b" 27)]
+    (is (object? o))
+    (is (== 2 (count (js-keys o))))
+    (is (== 17 (gobject/get o "a")))
+    (is (== 27 (gobject/get o "b")))))
+
+(defprotocol ExtMetaProtocol
+  :extend-via-metadata true
+  (ext-meta-protocol [x]))
+
+(defprotocol NonMetaProtocol
+  (non-meta-protocol [x]))
+
+(defrecord SomeMetaImpl [x]
+  ExtMetaProtocol
+  (ext-meta-protocol [_] x)
+  NonMetaProtocol
+  (non-meta-protocol [_] x))
+
+(deftest test-cljs-2960
+  ;; protocol impl via metadata
+  (is (= 1 (ext-meta-protocol (with-meta {} {`ext-meta-protocol (fn [_] 1)}))))
+  ;; metadata before actual impl
+  (is (= 1 (ext-meta-protocol (with-meta (SomeMetaImpl. 2) {`ext-meta-protocol (fn [_] 1)}))))
+  ;; protocol not marked as :extend-via-metadata so fallthrough to no impl
+  (is (thrown? js/Error (non-meta-protocol (with-meta {} {`non-meta-protocol (fn [_] 1)}))))
+  ;; normal impl call just in case
+  (is (= 2 (non-meta-protocol (with-meta (SomeMetaImpl. 2) {`non-meta-protocol (fn [_] 1)})))))
+
+(extend-type PersistentArrayMap
+  ExtMetaProtocol
+  (ext-meta-protocol [m] 2))
+
+(deftest test-cljs-3313
+  (testing "metadata protocol fn takes precedence over direct implementation"
+    (= 1 (ext-meta-protocol (with-meta (array-map) {`ext-meta-protocol (fn [_] 1)})))))
+
+(deftest test-cljs-3054
+  (testing "`into` behaves the same as Clojure"
+    (is (nil? (into nil #{})))
+    (is (= '(3 2 1) (into nil [1 2 3]))))
+  (testing "calling `set/union` with nilable sets returns a nilable set"
+    (is (nil? (set/union #{} nil nil)))))
+
+(deftest test-cljs-3092
+  (is (nil? (peek (subvec [] 0))))
+  (is (nil? (peek (subvec [1] 1))))
+  (is (nil? (peek (subvec [1 2] 0 0))))
+  (is (nil? (peek (subvec [1 2] 1 1))))
+  (is (nil? (peek (subvec [1 2] 2 2)))))
+
+(deftest test-cljs-3093
+  (is (thrown-with-msg? js/Error #"Index out of bounds" (subvec [1 2 3 4] -1)))
+  (is (= [1 2 3 4] (subvec [1 2 3 4] -0.9)))
+  (is (thrown-with-msg? js/Error #"Index out of bounds" (subvec [1 2 3 4] 2 1)))
+  (is (= [] (subvec [1 2 3 4] 1.7 1.3)))
+  (is (thrown-with-msg? js/Error #"Index out of bounds" (subvec [1 2 3 4] 0 5)))
+  (is (= [1 2 3 4] (subvec [1 2 3 4] 0 4.9))))
+
+(deftest test-cljs-3095
+  (let [a #js [:original]
+        v (apply vector a)]
+    (aset a 0 :modified)
+    (is (= :original (v 0)))))
+
+(deftest test-cljs-3119
+  (is (= "a" (get "abc" -0.5)))
+  (is (nil? (get "abc" -1))))
+
+(deftest test-cljs-3130
+  (is (thrown-with-msg? js/Error #"Cannot compare f151d12d-7bd5-4409-9352-5900ee07baf7 to a"
+        (compare (uuid "f151d12d-7bd5-4409-9352-5900ee07baf7") "a"))))
+
+(deftest test-cljs-3202
+  (is (= :/ (keyword "/")))
+  (is (= (hash :/) (hash (keyword "/")))))
+
+(deftest test-cljs-3263
+  (is (= "#inst \"0985-04-12T23:20:50.520-00:00\"" (pr-str #inst "0985-04-12T23:20:50.520-00:00")))
+  (is (= "#inst \"1970-12-18T23:20:50.520-00:00\"" (pr-str #inst "1970-12-18T23:20:50.520-00:00"))))
+
+(deftest test-cljs-3270
+  (is (== 10 (count (range 0 (+ 1 (/ 9)) (/ 9))))))
+
+(deftest test-cljs-3271
+  (is (== 0.6 (nth (range 0 1 0.1) 6))))
+
+(defrecord CLJS3305A [])
+(defrecord CLJS3305B [a b])
+
+(deftest test-cljs-3305
+  (let [empty-basis       (->CLJS3305A)
+        nonempty-basis    (->CLJS3305B 1 2)
+        empty-extended    (assoc empty-basis :y 1)
+        nonempty-extended (assoc nonempty-basis :y 1)]
+    (is (false? (contains? empty-basis       :a)))
+    (is (true?  (contains? nonempty-basis    :a)))
+    (is (false? (contains? nonempty-basis    :c)))
+    (is (true?  (contains? empty-extended    :y)))
+    (is (false? (contains? empty-extended    :z)))
+    (is (true?  (contains? nonempty-extended :a)))
+    (is (false? (contains? nonempty-extended :c)))
+    (is (true?  (contains? nonempty-extended :y)))
+    (is (false? (contains? nonempty-extended :z)))))
+
+(deftest test-cljs-3306
+  (let [sv (subvec [0 1 2 3 4] 2 4)]
+    (is (true?  (contains? sv 0)))
+    (is (false? (contains? sv 0.5)))
+    (is (true?  (contains? sv 1)))
+    (is (false? (contains? sv 1.5)))
+    (is (false? (contains? sv :kw))))
+  (let [sv (subvec [0 1 2 3 4] 2 2)]
+    (is (false? (contains? sv 0)))))
+
+(deftest test-cljs-3309
+  (is (= :ok
+         (loop [x 4]
+           (if (or (< x 4) (not-any? (fn [y] x) [1]))
+             (recur 5)
+             :ok))))
+  (is (= '([])
+         ((fn [s]
+            (for [e s :when (and (sequential? e) (every? (fn [x] x) e))]
+              e))
+          [[]]))))
+
+(deftest test-cljs-3333
+  (defonce not-native 17)   ;; Intentionally matching a core name
+  (is (== 17 not-native)))
+
+(deftest test-cljs-3334
+  (is (exists? /))
+  (is (exists? cljs.core//))
+  (is (not (exists? cljs.core-test//))))
+
+(deftest test-update-vals
+  (let [inm  (with-meta {:a 1 :b 2} {:has :meta})]
+    (are [result expr] (= result expr)
+      {:a 2 :b 3}   (update-vals inm inc)
+      {:has :meta}  (meta (update-vals inm inc))
+      {0 2 2 4}     (update-vals (hash-map 0 1 2 3) inc)
+      {0 2 2 4}     (update-vals (array-map 0 1 2 3) inc)
+      {0 2 2 4}     (update-vals (sorted-map 2 3 0 1) inc))))
+
+(deftest test-update-keys
+  (let [inm  (with-meta {:a 1 :b 2} {:has :meta})]
+    (are [result expr] (= result expr)
+      {"a" 1 "b" 2} (update-keys inm name)
+      {:has :meta}  (meta (update-keys inm name))
+      {1 1 3 3}     (update-keys (hash-map 0 1 2 3) inc)
+      {1 1 3 3}     (update-keys (array-map 0 1 2 3) inc)
+      {1 1 3 3}     (update-keys (sorted-map 2 3 0 1) inc))))
+
+(deftest test-cljs-3363
+  (is (= {}
+        (reduce-kv #(assoc %1 %3 %2) {} nil)))
+  (is (= {1 :a 2 :b}
+        (reduce-kv #(assoc %1 %3 %2) {} (seq {:a 1 :b 2})))))
+
+(defn cljs-3386-test-fn
+  ([x] x) ([_ _ & zs] zs))
+
+(deftest test-cljs-3386
+  (is (nil? (cljs-3386-test-fn 1 2)))
+  (is (= '(3 4) (cljs-3386-test-fn 1 2 3 4))))
+
+(deftest test-cljs-3400
+  (testing "macroexpanding non-seqs should work"
+    (is (true? (macroexpand '(and))))
+    (is (nil? (macroexpand '(or))))))
+
+(deftest test-cljs-3395
+  (testing "(set! foo -bar baz) pattern"
+    (let [a #js {}]
+      (set! a -x false)
+      (is (false? (.-x a))))))
+
+(deftest test-cljs-3406
+  (testing "ISwap/IReset protocols"
+    (let [a (atom {:x 0})
+          c (reify
+              IDeref
+              (-deref [_]
+                (:x @a))
+
+              ISwap
+              (-swap! [o f]
+                (:x (swap! a update :x f)))
+              (-swap! [o f x]
+                (:x (swap! a update :x f x)))
+              (-swap! [o f x y]
+                (:x (swap! a update :x f x y)))
+              (-swap! [o f x y zs]
+                (:x (swap! a #(apply update % :x f x y zs))))
+
+              IReset
+              (-reset! [o new-value]
+                (:x (swap! a assoc :x new-value))))]
+      (is (= 0 @c))
+      (is (= 1 (swap! c inc)))
+      (is (= 1 @c))
+      (is (= 2 (swap! c + 1)))
+      (is (= 2 @c))
+      (is (= 5 (swap! c + 1 2)))
+      (is (= 5 @c))
+      (is (= 11 (swap! c + 1 2 3)))
+      (is (= 11 @c))
+      (is (= 0 (reset! c 0)))
+      (is (= 0 @c))
+
+      (is (= [0 1] (swap-vals! c inc)))
+      (is (= 1 @c))
+      (is (= [1 2] (swap-vals! c + 1)))
+      (is (= 2 @c))
+      (is (= [2 5] (swap-vals! c + 1 2)))
+      (is (= 5 @c))
+      (is (= [5 11] (swap-vals! c + 1 2 3)))
+      (is (= 11 @c))
+      (is (= [11 0] (reset-vals! c 0)))
+      (is (= 0 @c)))))
+
+(defn test-keys [& {:as opts, :keys [a b]}]
+  [a b opts])
+
+(deftest test-cljs-3299-trailing-keys
+  (testing "verify proper handling of trailing keys"
+    (is (= (test-keys :a 1, :b 2)
+           [1 2 {:a 1, :b 2}]))
+    (is (= (test-keys {:a 1, :b 2})
+           [1 2 {:a 1, :b 2}]))
+    (is (= (test-keys {:a 1, :b 2, :c 3})
+           [1 2 {:a 1, :b 2, :c 3}]))
+    (is (= (test-keys :d 4 {:a 1, :b 2, :c 3})
+           [1 2 {:d 4, :a 1, :b 2, :c 3}]))))

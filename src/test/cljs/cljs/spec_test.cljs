@@ -441,6 +441,33 @@
   (is (= (s/describe #(odd? %)) ::s/unknown))
   (is (= (s/form #(odd? %)) ::s/unknown)))
 
+(defn defk [key & [doc]]
+  [key doc])
+
+(s/fdef defk
+  :args (s/cat :key keyword?
+               :doc (s/? string?)))
+
+(st/instrument `defk)
+
+(deftest cljs-2977-variadic-fn
+  (is (thrown? js/Error (defk 1 1)))
+  (is (thrown? js/Error (defk :foo 1)))
+  (is (= [:foo "bar"] (defk :foo "bar"))))
+
+(s/def ::add-spec
+  (s/fspec :args (s/cat :n pos?)
+    :ret number?))
+
+(s/def add2 ::add-spec)
+(defn add2 [n]
+  (+ n 2))
+
+(st/instrument `add2)
+
+(deftest cljs-3137
+  (is (thrown? js/Error (add2 0))))
+
 (comment
 
   (run-tests)

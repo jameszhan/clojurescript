@@ -15,7 +15,7 @@
             [cljs.env :as env]
             [cljs.test-util :as test]
             [cljs.util :as util]
-            [clojure.data.json :as json]
+            [cljs.vendor.clojure.data.json :as json]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.java.shell :as sh]
@@ -181,7 +181,7 @@
          :output-to out})
       (is false)
       (catch Throwable e
-        (let [cause-message (.getMessage (.getCause e))]
+        (let [cause-message (.getMessage (.getCause (.getCause e)))]
           (is (or (re-find #"Circular dependency detected, circular-deps.a -> circular-deps.b -> circular-deps.a" cause-message)
                   (re-find #"Circular dependency detected, circular-deps.b -> circular-deps.a -> circular-deps.b" cause-message))))))))
 
@@ -190,7 +190,6 @@
    :opts
    {:output-dir output-dir
     :optimizations :none
-    :language-in :es6
     :verbose true
     :foreign-libs [{:file "src/test/cljs_build/loader_test/foreignA.js"
                     :provides ["foreign.a"]}
@@ -283,6 +282,30 @@
       (build/build (build/inputs (io/file inputs "npm_deps_test/string_requires.cljs")) opts cenv)
       (is (not (nil? (re-find #"\.\.[\\/]node_modules[\\/]react-dom[\\/]server\.js" (slurp (io/file out "cljs_deps.js"))))))))
 
+  (.delete (io/file "package.json"))
+  (test/delete-node-modules))
+
+(deftest test-npm-deps-invoke-cljs-3144
+  (test/delete-node-modules)
+  (spit (io/file "package.json") "{}")
+  (let [cenv (env/default-compiler-env)
+        out (.getPath (io/file (test/tmp-dir) "npm-deps-test-out"))
+        {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                               :opts {:main 'npm-deps-test.invoke
+                                      :output-dir out
+                                      :optimizations :none
+                                      :install-deps true
+                                      :npm-deps {:react "15.6.1"
+                                                 :react-dom "15.6.1"
+                                                 :lodash-es "4.17.4"
+                                                 :lodash "4.17.4"}
+                                      :closure-warnings {:check-types :off
+                                                         :non-standard-jsdoc :off}}}]
+    (test/delete-out-files out)
+    (testing "invoking fns from Node.js libraries should not emit .call convention"
+      (build/build (build/inputs (io/file inputs "npm_deps_test/invoke.cljs")) opts cenv)
+      (is (.exists (io/file out "node_modules/react/react.js")))
+      (is (not (string/includes? (slurp (io/file out "npm_deps_test/invoke.cljs")) "call")))))
   (.delete (io/file "package.json"))
   (test/delete-node-modules))
 
@@ -431,7 +454,11 @@
         cenv (env/default-compiler-env)]
     (test/delete-out-files out)
     (build/build (build/inputs (io/file inputs "data_readers_test")) opts cenv)
-    (is (contains? (-> @cenv ::ana/data-readers) 'test/custom-identity))))
+    (is (contains? (-> @cenv ::ana/data-readers) 'test/custom-identity))
+    (is (true? (boolean (re-find #"Array\.of\(\"foo\"\)"
+                          (slurp (io/file
+                                   out ;"data-readers-test-out"
+                                   "data_readers_test" "core.js"))))))))
 
 (deftest test-data-readers-records
   (let [out (.getPath (io/file (test/tmp-dir) "data-readers-test-records-out"))
@@ -558,7 +585,7 @@
       ;; assert Closure finds and processes the left-pad dep in node_modules
       ;; if it can't be found the require will be issued to module$left_pad
       ;; so we assert it's of the form module$path$to$node_modules$left_pad$index
-      (is (re-find #"module\$.*\$node_modules\$left_pad\$index\[\"default\"\]\(42,5,0\)" (slurp foreign-lib-file))))
+      (is (re-find #"module\$.*\$node_modules\$left_pad\$index\[\"default\"\]\)\(42,5,0\)" (slurp foreign-lib-file))))
     (test/delete-out-files out)
     (test/delete-node-modules)))
 
@@ -679,3 +706,137 @@
                 sha (string/lower-case (util/content-sha (slurp (io/file f)) 7))]
            (is (true? (.exists f)))
            (is (string/includes? (.getPath f) sha))))))))
+
+(deftest cljs-3209-trivial-output-size
+  (let [out (.getPath (io/file (test/tmp-dir) "3209-test-out"))
+        out-file (io/file out "main.js")
+        {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                               :opts {:main 'trivial.core
+                                      :output-dir out
+                                      :output-to (.getPath out-file)
+                                      :optimizations :advanced}}
+        cenv (env/default-compiler-env)]
+    (test/delete-out-files out)
+    (build/build (build/inputs (io/file inputs "trivial/core.cljs")) opts cenv)
+    (is (< (.length out-file) 10000))))
+
+(deftest cljs-3255-nil-inputs-build
+  (let [out (.getPath (io/file (test/tmp-dir) "3255-test-out"))
+        out-file (io/file out "main.js")
+        opts {:main 'trivial.core
+              :output-to (.getPath out-file)
+              :output-dir out
+              :optimizations :none}
+        cenv (env/default-compiler-env)]
+    (test/delete-out-files out)
+    (build/build nil opts cenv)))
+
+(deftest test-cljs-3235
+  (test/delete-node-modules)
+  (spit (io/file "package.json") "{}")
+  (testing "Test various require patterns for Node and foreign libraries"
+    (let [ws (atom [])
+          out (.getPath (io/file (test/tmp-dir) "cljs-3235-out"))
+          {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                                 :opts   {:main             'cljs-3235.core
+                                          :output-dir       out
+                                          :optimizations    :none
+                                          :target           :nodejs
+                                          :install-deps     true
+                                          :npm-deps         {:react        "16.13.0"
+                                                             :react-dom    "16.13.0"
+                                                             :react-select "5.2.1"}
+                                          :foreign-libs     [{:file (.getPath (io/file "src" "test" "cljs_build" "cljs_3235" "foreign.js"))
+                                                              :provides ["some-foreign"]
+                                                              :global-exports '{some-foreign globalLib}}]
+                                          :closure-warnings {:check-types        :off
+                                                             :non-standard-jsdoc :off}}}
+          cenv (env/default-compiler-env opts)]
+      (test/delete-out-files out)
+      (ana/with-warning-handlers [(collecting-warning-handler ws)]
+        (build/build (build/inputs (io/file inputs "cljs_3235/core.cljs")) opts cenv))
+      (is (.exists (io/file out "cljs_3235/core.js")))
+      (is (true? (boolean (re-find #"cljs_3235\.core\.node\$module\$react_select\$default = require\('react-select'\)\['default'\];"
+                            (slurp (io/file out "cljs_3235/core.js"))))))
+      (is (true? (boolean (re-find #"cljs_3235\.core\.node\$module\$react_select\$default\$baz = require\('react-select'\)\['default'\]\['baz'\];"
+                            (slurp (io/file out "cljs_3235/core.js"))))))
+      (is (true? (boolean (re-find #"cljs_3235\.core\.global\$module\$some_foreign\$woz = goog.global\[\"globalLib\"\]\['woz'\];"
+                            (slurp (io/file out "cljs_3235/core.js"))))))
+      (is (true? (boolean (re-find #"cljs_3235\.core\.global\$module\$some_foreign\$foz\$boz = goog.global\[\"globalLib\"\]\['foz'\]\['boz'\];"
+                            (slurp (io/file out "cljs_3235/core.js"))))))
+      (is (empty? @ws))))
+  (.delete (io/file "package.json"))
+  (test/delete-node-modules))
+
+(deftest test-cljs-3284
+  (testing "Type hint warnings don't fire just because of private types"
+    (let [ws (atom [])
+          out (.getPath (io/file (test/tmp-dir) "cljs-3235-out"))
+          {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                                 :opts   {:main             'cljs-3284.core
+                                          :output-dir       out
+                                          :optimizations    :none}}
+          cenv (env/default-compiler-env opts)]
+      (test/delete-out-files out)
+      (ana/with-warning-handlers [(collecting-warning-handler ws)]
+        (build/build (build/inputs (io/file inputs "cljs_3284/core.cljs")) opts cenv))
+      (is (empty? @ws)))))
+
+(deftest test-cljs-3311-regress
+  (testing "Test that CLJS-3311 did not regress"
+    (let [ws (atom [])
+          out (.getPath (io/file (test/tmp-dir) "cljs-3311-regress-out"))
+          {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                                 :opts   {:main             'cljs-3311-regress.core
+                                          :output-dir       out
+                                          :optimizations    :none}}
+          cenv (env/default-compiler-env opts)]
+      (test/delete-out-files out)
+      (ana/with-warning-handlers [(collecting-warning-handler ws)]
+        (build/build (build/inputs (io/file inputs "cljs_3311_regress/core.cljs")) opts cenv))
+      (is (empty? @ws)))))
+
+(deftest test-cljs-3332
+  (testing "Test that package.json w/ exports work, Firebase as example"
+    (let [out (.getPath (io/file (test/tmp-dir) "npm-deps-test-out"))]
+      (test/delete-out-files out)
+      (test/delete-node-modules)
+      (spit (io/file "package.json") "{}")
+      (let [{:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                                   :opts {:main 'firebase.core
+                                          :output-dir out
+                                          :optimizations :none
+                                          :install-deps true
+                                          :npm-deps {:firebase "9.3.0"}
+                                          :closure-warnings {:check-types :off}
+                                          :target :bundle}}
+            cenv (env/default-compiler-env)]
+        (build/build (build/inputs (io/file inputs "firebase/core.cljs")) opts cenv)
+        (is (= #{"firebase/auth"} (:node-module-index @cenv))))
+      (.delete (io/file "package.json"))
+      (test/delete-node-modules)
+      (test/delete-out-files out))))
+
+(deftest test-cljs-3346-as-alias
+  (testing "Test that using :as-alias does not load the namespace, and that
+            a namespace that does not exist on file can be used."
+    (let [out (.getPath (io/file (test/tmp-dir) "cljs-3346-as-alias-out"))]
+      (test/delete-out-files out)
+      (test/delete-node-modules)
+      (spit (io/file "package.json") "{}")
+      (let [{:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                                   :opts {:main 'cljs-3346-as-alias.core
+                                          :output-dir out
+                                          :optimizations :none
+                                          :closure-warnings {:check-types :off}}}
+            cenv (env/default-compiler-env)]
+        (build/build (build/inputs (io/file inputs "cljs_3346_as_alias/core.cljs")) opts cenv))
+      (let [source (slurp (io/file out "cljs_3346_as_alias/core.js"))]
+        (is (true? (boolean (re-find #"goog.require\('cljs.core'\)" source))))
+        (is (false? (boolean (re-find #"goog.require\('clojure.set'\)" source))))
+        (is (false? (boolean (re-find #"goog.require\('made.up.lib'\)" source))))
+        (is (true? (boolean (re-find #"clojure\.set\/foo" source))))
+        (is (true? (boolean (re-find #"made\.up\.lib\/bar" source)))))
+      (.delete (io/file "package.json"))
+      (test/delete-node-modules)
+      (test/delete-out-files out))))

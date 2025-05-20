@@ -157,9 +157,12 @@
                     (cond->
                       [(status-line status)
                        "Server: ClojureScript REPL"
-                       (str "Content-Type: "
-                         content-type
-                         "; charset=" encoding)
+                       (if (not= content-type "application/wasm")
+                         (str "Content-Type: "
+                              content-type
+                              "; charset=" encoding)
+                         (str "Content-Type: "
+                              content-type))
                        (str "Content-Length: " content-length)]
                       gzip? (conj "Content-Encoding: gzip")
                       true (conj "")))]
@@ -180,17 +183,24 @@
     "text/html"))
 
 (defn- dispatch-request [request conn opts]
-  (if-let [handlers ((:method request) @handlers)]
-    (if-let [handler
-             (some (fn [{:keys [pred handler]}]
-                     (when (pred request conn opts)
-                       handler))
-               handlers)]
-      (if (= :post (:method request))
-        (handler (read-string (:content request)) conn opts )
-        (handler request conn opts))
-      (send-404 conn (:path request)))
-    (.close conn)))
+  (try
+    (if-let [handlers ((:method request) @handlers)]
+      (if-let [handler
+               (some (fn [{:keys [pred handler]}]
+                       (when (pred request conn opts)
+                         handler))
+                     handlers)]
+        (if (= :post (:method request))
+          (handler (read-string (:content request)) conn opts )
+          (handler request conn opts))
+        (send-404 conn (:path request))))
+    (catch Throwable t
+      (try
+        (send-and-close conn 500 (str "<html><body>"
+                                      "<h2>Exception while handling</h2>"
+                                      "</body></html>"))
+        (catch Throwable _))
+      (throw t))))
 
 (defn- handle-connection
   [opts conn]

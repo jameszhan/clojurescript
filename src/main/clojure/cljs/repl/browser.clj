@@ -12,7 +12,7 @@
             [clojure.java.browse :as browse]
             [clojure.string :as string]
             [clojure.edn :as edn]
-            [clojure.data.json :as json]
+            [cljs.vendor.clojure.data.json :as json]
             [cljs.util :as util]
             [cljs.closure :as cljsc]
             [cljs.repl :as repl]
@@ -37,10 +37,22 @@
   {".html" "text/html"
    ".css" "text/css"
 
+   ".ttf" "font/ttf"
+   ".otf" "font/otf"
+
+   ".pdf" "application/pdf"
+
    ".jpg" "image/jpeg"
    ".png" "image/png"
    ".gif" "image/gif"
    ".svg" "image/svg+xml"
+
+   ".mp4" "video/mp4"
+   ".m4a" "audio/m4a"
+   ".m4v" "video/mp4"
+   ".mp3" "audio/mpeg"
+   ".mpeg" "video/mpeg"
+   ".wav" "audio/wav"
 
    ".js" "text/javascript"
    ".json" "application/json"
@@ -48,18 +60,33 @@
    ".cljs" "text/x-clojure"
    ".cljc" "text/x-clojure"
    ".edn" "text/x-clojure"
-   ".map" "application/json"})
+   ".map" "application/json"
+   ".wasm" "application/wasm"})
 
 (def mime-type->encoding
   {"text/html" "UTF-8"
    "text/css" "UTF-8"
+
+   "font/ttf" "ISO-8859-1"
+   "font/otf" "ISO-8859-1"
+
+   "application/pdf" "ISO-8859-1"
+
    "image/jpeg" "ISO-8859-1"
    "image/png" "ISO-8859-1"
    "image/gif" "ISO-8859-1"
    "image/svg+xml" "UTF-8"
+
+   "video/mp4" "ISO-8859-1"
+   "audio/m4a" "ISO-8859-1"
+   "audio/mpeg" "ISO-8859-1"
+   "video/mpeg" "ISO-8859-1"
+   "audio/wav" "ISO-8859-1"
+
    "text/javascript" "UTF-8"
    "text/x-clojure" "UTF-8"
-   "application/json" "UTF-8"})
+   "application/json" "UTF-8"
+   "application/wasm" "ISO-8859-1"})
 
 (defn- set-return-value-fn
   "Save the return value function which will be called when the next
@@ -91,17 +118,20 @@
   (slurp (:client-js @browser-state)))
 
 (defn send-repl-client-page
-  [request conn opts]
-  (server/send-and-close conn 200
-    (str "<html><head><meta charset=\"UTF-8\"></head><body>
-          <script type=\"text/javascript\">"
-         (repl-client-js)
-         "</script>"
-         "<script type=\"text/javascript\">
-          clojure.browser.repl.client.start(\"http://" (-> request :headers :host) "\");
+  [{:keys [path] :as request} conn opts]
+  (if-not browser-state
+    (server/send-404 conn path)
+    (server/send-and-close conn 200
+      (str
+        "<html><head><meta charset=\"UTF-8\"></head><body>"
+        "<script type=\"text/javascript\">"
+        (repl-client-js)
+        "</script>"
+        "<script type=\"text/javascript\">
+        clojure.browser.repl.client.start(\"http://" (-> request :headers :host) "\");
           </script>"
-         "</body></html>")
-    "text/html"))
+        "</body></html>")
+     "text/html")))
 
 (defn default-index [output-to]
   (str
@@ -152,7 +182,7 @@
 
 (defn send-static
   [{path :path :as request} conn
-   {:keys [static-dir output-to output-dir host port gzip?] :or {output-dir "out"} :as opts}]
+   {:keys [static-dir output-dir host port gzip?] :or {output-dir "out"} :as opts}]
   (let [output-dir (when-not (.isAbsolute (io/file output-dir)) output-dir)]
     (if (and static-dir (not= "/favicon.ico" path))
       (let [path (if (= "/" path) "/index.html" path)
@@ -178,12 +208,16 @@
           (let [mime-type (path->mime-type ext->mime-type path "text/plain")
                 encoding (mime-type->encoding mime-type "UTF-8")]
             (server/send-and-close conn 200 (slurp local-path :encoding encoding)
-                                   mime-type encoding (and gzip? (= "text/javascript" mime-type))))
+                                   mime-type encoding (and gzip? (or (= "text/javascript" mime-type)
+                                                                     (= "application/wasm" mime-type)))))
+
           ;; "/index.html" doesn't exist, provide our own
           (= path "/index.html")
           (server/send-and-close conn 200
-            (default-index (or output-to (str output-dir "/main.js")))
+            (default-index (str output-dir "/main.js"))
             "text/html" "UTF-8")
+
+          ;; "/main.js" doesn't exist, provide our own
           (= path (cond->> "/main.js" output-dir (str "/" output-dir )))
           (let [closure-defines (-> `{"goog.json.USE_NATIVE_JSON" true
                                       clojure.browser.repl/HOST ~host
@@ -197,10 +231,11 @@
                    "document.write('<script src=\"" output-dir "/goog/base.js\"></script>');\n"
                    "document.write('<script src=\"" output-dir "/goog/deps.js\"></script>');\n"
                    (when (.exists (io/file output-dir "cljs_deps.js"))
-                     "document.write('<script src=\"" output-dir "/cljs_deps.js\"></script>');\n")
+                     (str "document.write('<script src=\"" output-dir "/cljs_deps.js\"></script>');\n"))
                    "document.write('<script src=\"" output-dir "/brepl_deps.js\"></script>');\n"
                    "document.write('<script>goog.require(\"clojure.browser.repl.preload\");</script>');\n")
               "text/javascript" "UTF-8"))
+
           :else (server/send-404 conn path)))
       (server/send-404 conn path))))
 
@@ -385,15 +420,23 @@
     {:browser-repl true
      :repl-requires
      '[[clojure.browser.repl] [clojure.browser.repl.preload]]
+     ::repl/fast-initial-prompt? :after-setup
      :cljs.cli/commands
      {:groups {::repl {:desc "browser REPL options"}}
       :init
       {["-H" "--host"]
-       {:group ::repl :fn #(assoc-in %1 [:repl-env-options :host] %2)
+       {:group ::repl
+        :fn #(-> %1
+               (assoc-in [:repl-env-options :host] %2)
+               (assoc-in [:options :closure-defines 'clojure.browser.repl/HOST] %2))
         :arg "address"
         :doc "Address to bind"}
        ["-p" "--port"]
-       {:group ::repl :fn #(assoc-in %1 [:repl-env-options :port] (Integer/parseInt %2))
+       {:group ::repl
+        :fn #(let [port (Integer/parseInt %2)]
+               (-> %1
+                 (assoc-in [:repl-env-options :port] port)
+                 (assoc-in [:options :closure-defines 'clojure.browser.repl/PORT] port)))
         :arg "number"
         :doc "Port to bind"}}}})
   repl/IParseStacktrace

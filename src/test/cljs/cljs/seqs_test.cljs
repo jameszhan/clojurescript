@@ -8,7 +8,12 @@
 
 (ns cljs.seqs-test
   (:refer-clojure :exclude [iter])
-  (:require [cljs.test :refer-macros [deftest testing is]]
+  (:require [cljs.test :refer-macros [deftest testing are is]]
+            [clojure.test.check :as tc]
+            [clojure.test.check.clojure-test :refer-macros [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop :include-macros true]
+            [clojure.test.check.random :as random]
             [clojure.string :as s]
             [clojure.set :as set]))
 
@@ -86,7 +91,37 @@
       (testing "queue"
         (is (identical? (type e-queue) PersistentQueue))
         (is (empty? e-queue))
-        (is (= {:b :c} (meta e-queue)))))))
+        (is (= {:b :c} (meta e-queue)))))
+    (testing "non-emptyable"
+      (is (nil? (empty 1)))
+      (is (nil? (empty "abc")))
+      (is (nil? (empty #js [1 2 3]))))))
+
+(deftest test-empty?
+  (are [x] (empty? x)
+       nil
+       ()
+       (lazy-seq nil)    ; => ()
+       []
+       {}
+       #{}
+       ""
+       (into-array [])
+       (transient [])
+       (transient #{})
+       (transient {}))
+
+  (are [x] (not (empty? x))
+       '(1 2)
+       (lazy-seq [1 2])
+       [1 2]
+       {:a 1 :b 2}
+       #{1 2}
+       "abc"
+       (into-array [1 2])
+       (transient [1])
+       (transient #{1})
+       (transient {1 2})))
 
 (deftest test-distinct
   (testing "Testing distinct? & distinct"
@@ -220,3 +255,277 @@
 (deftest test-cljs-2911
   (testing "partition-by works correclty with infinite seqs"
     (is (= (first (second (partition-by zero? (range)))) 1))))
+
+(deftest test-cljs-3230
+  (testing "sequence ops on ES6 collections"
+    (let [s (js/Set.)]
+      (is (= () (rest s)))
+      (is (nil? (next s)))
+      (is (empty? s)))))
+
+(deftest test-js-iterable?
+  (testing "test that js-iterable? works on ES6 collections and normal values"
+    (is (true? (js-iterable? (js/Set.))))
+    (is (false? (js-iterable? 1)))
+    (is (false? (js-iterable? nil)))))
+
+(deftest test-iteration-opts
+  (let [genstep (fn [steps]
+                  (fn [k] (swap! steps inc) (inc k)))
+        test (fn [expect & iteropts]
+               (is (= expect
+                     (let [nsteps (atom 0)
+                           iter (apply iteration (genstep nsteps) iteropts)
+                           ret (doall (seq iter))]
+                       {:ret ret :steps @nsteps})
+                     (let [nsteps (atom 0)
+                           iter (apply iteration (genstep nsteps) iteropts)
+                           ret (into [] iter)]
+                       {:ret ret :steps @nsteps}))))]
+    (test {:ret [1 2 3 4]
+           :steps 5}
+      :initk 0 :somef #(< % 5))
+    (test {:ret [1 2 3 4 5]
+           :steps 5}
+      :initk 0 :kf (fn [ret] (when (< ret 5) ret)))
+    (test {:ret ["1"]
+           :steps 2}
+      :initk 0 :somef #(< % 2) :vf str))
+
+  ;; kf does not stop on false
+  (let [iter #(iteration (fn [k]
+                           (if (boolean? k)
+                             [10 :boolean]
+                             [k k]))
+                :vf second
+                :kf (fn [[k v]]
+                      (cond
+                        (= k 3) false
+                        (< k 14) (inc k)))
+                :initk 0)]
+    (is (= [0 1 2 3 :boolean 11 12 13 14]
+          (into [] (iter))
+          (seq (iter))))))
+
+(deftest test-iteration
+  ;; equivalence to es6-iterator-seq
+  (let [arr #js [1 nil 3 true false 4 6 nil 7]]
+    (is (= (let [iter (es6-iterator arr)]
+             (vec (iteration (fn [_] (.next iter))
+                    :somef #(not (.-done %))
+                    :vf #(.-value %))))
+          (let [iter (es6-iterator arr)]
+            (vec (es6-iterator-seq iter))))))
+
+  ;; paginated API
+  (let [items 12 pgsize 5
+        src (vec (repeatedly items #(random-uuid)))
+        api (fn [tok]
+              (let [tok (or tok 0)]
+                (when (< tok items)
+                  {:tok (+ tok pgsize)
+                   :ret (subvec src tok (min (+ tok pgsize) items))})))]
+    (is (= src
+          (mapcat identity (iteration api :kf :tok :vf :ret))
+          (into [] cat (iteration api :kf :tok :vf :ret)))))
+
+  (let [src [:a :b :c :d :e]
+        api (fn [k]
+              (let [k (or k 0)]
+                (if (< k (count src))
+                  {:item (nth src k)
+                   :k (inc k)})))]
+    (is (= [:a :b :c]
+          (vec (iteration api
+                 :somef (comp #{:a :b :c} :item)
+                 :kf :k
+                 :vf :item))
+          (vec (iteration api
+                 :kf #(some-> % :k #{0 1 2})
+                 :vf :item))))))
+
+(defn- make-rng [seed]
+  (atom (random/make-random seed)))
+
+(defn- next-long [rng]
+  (let [[r1 r2] (random/split @rng)]
+    (reset! rng r2)
+    (long (random/rand-long r1))))
+
+(deftest test-take
+  (are [x y] (= x y)
+    (take 1 [1 2 3 4 5]) '(1)
+    (take 3 [1 2 3 4 5]) '(1 2 3)
+    (take 5 [1 2 3 4 5]) '(1 2 3 4 5)
+    (take 9 [1 2 3 4 5]) '(1 2 3 4 5)
+
+    (take 0 [1 2 3 4 5]) ()
+    (take -1 [1 2 3 4 5]) ()
+    (take -2 [1 2 3 4 5]) ()
+
+    (take 0.25 [1 2 3 4 5]) '(1)))
+
+
+(deftest test-drop
+  (are [x y] (= x y)
+    (drop 1 [1 2 3 4 5]) '(2 3 4 5)
+    (drop 3 [1 2 3 4 5]) '(4 5)
+    (drop 5 [1 2 3 4 5]) ()
+    (drop 9 [1 2 3 4 5]) ()
+
+    (drop 0 [1 2 3 4 5]) '(1 2 3 4 5)
+    (drop -1 [1 2 3 4 5]) '(1 2 3 4 5)
+    (drop -2 [1 2 3 4 5]) '(1 2 3 4 5)
+
+    (drop 0.25 [1 2 3 4 5]) '(2 3 4 5) )
+
+  (are [coll] (= (drop 4 coll) (drop -2 (drop 4 coll)))
+    [0 1 2 3 4 5]
+    (seq [0 1 2 3 4 5])
+    (range 6)
+    (repeat 6 :x)))
+
+(deftest test-nthrest
+  (are [x y] (= x y)
+    (nthrest [1 2 3 4 5] 1) '(2 3 4 5)
+    (nthrest [1 2 3 4 5] 3) '(4 5)
+    (nthrest [1 2 3 4 5] 5) ()
+    (nthrest [1 2 3 4 5] 9) ()
+
+    (nthrest [1 2 3 4 5] 0) '(1 2 3 4 5)
+    (nthrest [1 2 3 4 5] -1) '(1 2 3 4 5)
+    (nthrest [1 2 3 4 5] -2) '(1 2 3 4 5)
+
+    (nthrest [1 2 3 4 5] 0.25) '(2 3 4 5)
+    (nthrest [1 2 3 4 5] 1.2) '(3 4 5))
+
+  ;; (nthrest coll 0) should return coll
+  (are [coll] (let [r (nthrest coll 0)] (and (= coll r) (= (type coll) (type r))))
+    [1 2 3]
+    (seq [1 2 3])
+    (range 10)
+    (repeat 10 :x)
+    (seq "abc")))
+
+(deftest test-nthnext
+  (are [x y] (= x y)
+    (nthnext [1 2 3 4 5] 1) '(2 3 4 5)
+    (nthnext [1 2 3 4 5] 3) '(4 5)
+    (nthnext [1 2 3 4 5] 5) nil
+    (nthnext [1 2 3 4 5] 9) nil
+
+    (nthnext [1 2 3 4 5] 0) '(1 2 3 4 5)
+    (nthnext [1 2 3 4 5] -1) '(1 2 3 4 5)
+    (nthnext [1 2 3 4 5] -2) '(1 2 3 4 5)
+
+    (nthnext [1 2 3 4 5] 0.25) '(2 3 4 5)
+    (nthnext [1 2 3 4 5] 1.2) '(3 4 5) ))
+
+(deftest test-partitionv-all
+  (is (= (partitionv-all 4 [1 2 3 4 5 6 7 8 9])
+        [[1 2 3 4] [5 6 7 8] [9]]))
+  (is (= (partitionv-all 4 2 [1 2 3 4 5 6 7 8 9])
+        [[1 2 3 4] [3 4 5 6] [5 6 7 8] [7 8 9] [9]])))
+
+(deftest test-partition
+  (are [x y] (= x y)
+    (partition 2 [1 2 3]) '((1 2))
+    (partition 2 [1 2 3 4]) '((1 2) (3 4))
+    (partition 2 []) ()
+
+    (partition 2 3 [1 2 3 4 5 6 7]) '((1 2) (4 5))
+    (partition 2 3 [1 2 3 4 5 6 7 8]) '((1 2) (4 5) (7 8))
+    (partition 2 3 []) ()
+
+    (partition 1 []) ()
+    (partition 1 [1 2 3]) '((1) (2) (3))
+
+    (partition 5 [1 2 3]) ()
+
+    (partition 4 4 [0 0 0] (range 10)) '((0 1 2 3) (4 5 6 7) (8 9 0 0))
+
+    (partition -1 [1 2 3]) ()
+    (partition -2 [1 2 3]) ())
+
+  ;; reduce
+  (is (= [1 2 4 8 16] (map #(reduce * (repeat % 2)) (range 5))))
+  (is (= [3 6 12 24 48] (map #(reduce * 3 (repeat % 2)) (range 5))))
+
+  ;; equality and hashing
+  (is (= (repeat 5 :x) (repeat 5 :x)))
+  (is (= (repeat 5 :x) '(:x :x :x :x :x)))
+  (is (= (hash (repeat 5 :x)) (hash '(:x :x :x :x :x))))
+  (is (= (assoc (array-map (repeat 1 :x) :y) '(:x) :z) {'(:x) :z}))
+  (is (= (assoc (hash-map (repeat 1 :x) :y) '(:x) :z) {'(:x) :z})))
+
+(deftest test-partitionv
+  (are [x y] (= x y)
+    (partitionv 2 [1 2 3]) '((1 2))
+    (partitionv 2 [1 2 3 4]) '((1 2) (3 4))
+    (partitionv 2 []) ()
+
+    (partitionv 2 3 [1 2 3 4 5 6 7]) '((1 2) (4 5))
+    (partitionv 2 3 [1 2 3 4 5 6 7 8]) '((1 2) (4 5) (7 8))
+    (partitionv 2 3 []) ()
+
+    (partitionv 1 []) ()
+    (partitionv 1 [1 2 3]) '((1) (2) (3))
+
+    (partitionv 5 [1 2 3]) ()
+
+    (partitionv -1 [1 2 3]) ()
+    (partitionv -2 [1 2 3]) ()))
+
+(deftest test-reduce-on-coll-seqs
+  ;; reduce on seq of coll, both with and without an init
+  (are [coll expected expected-init]
+    (and
+      (= expected-init (reduce conj [:init] (seq coll)))
+      (= expected (reduce conj (seq coll))))
+    ;; (seq [ ... ])
+    []      []    [:init]
+    [1]     1     [:init 1]
+    [[1] 2] [1 2] [:init [1] 2]
+
+    ;; (seq { ... })
+    {}        []          [:init]
+    {1 1}     [1 1]       [:init [1 1]]
+    {1 1 2 2} [1 1 [2 2]] [:init [1 1] [2 2]]
+
+    ;; (seq (hash-map ... ))
+    (hash-map)         []          [:init]
+    (hash-map 1 1)     [1 1]       [:init [1 1]]
+    (hash-map 1 1 2 2) [1 1 [2 2]] [:init [1 1] [2 2]]
+
+    ;; (seq (sorted-map ... ))
+    (sorted-map)         []          [:init]
+    (sorted-map 1 1)     [1 1]       [:init [1 1]]
+    (sorted-map 1 1 2 2) [1 1 [2 2]] [:init [1 1] [2 2]])
+
+  (are [coll expected expected-init]
+    (and
+      (= expected-init (reduce + 100 (seq coll)))
+      (= expected (reduce + (seq coll))))
+
+    ;; (seq (range ...))
+    (range 0)   0 100
+    (range 1 2) 1 101
+    (range 1 3) 3 103))
+
+(defspec iteration-seq-equals-reduce 1000
+  (prop/for-all [initk gen/small-integer
+                 seed gen/small-integer]
+    (let [src (fn []
+                (let [rng (make-rng seed)]
+                  (iteration #(unchecked-add % (next-long rng))
+                    :somef (complement #(zero? (mod % 1000)))
+                    :vf str
+                    :initk initk)))]
+      (= (into [] (src))
+        (into [] (seq (src)))))))
+
+(deftest cljs-3419-seq-js-iterable
+  (let [js-set (js/Set. #js [1 2 3 4])
+        js-map (js/Map. #js [#js [1 2] #js [3 4]])]
+    (is (seqable? js-set))
+    (is (seqable? js-map))))

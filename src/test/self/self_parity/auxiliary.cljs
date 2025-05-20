@@ -6,14 +6,12 @@
 ;; the terms of this license.
 ;; You must not remove this notice, or any other, from this software.
 
-(ns ^{:doc "This auxiliary namespace is not actually loaded.
-  Its mere presence cause it to be compiled and thus causes
+(ns ^{:doc "This auxiliary namespace only exists to cause
   the libs listed here to be dumped into the compiler output
   directory where they can be loaded on demand when running
   the compiler tests in bootstrap mode."}
   self-parity.auxiliary
   (:require
-    goog.Delay
     goog.Disposable
     goog.Promise
     goog.Throttle
@@ -55,7 +53,6 @@
     goog.date.month
     goog.date.relative.TimeDeltaFormatter
     goog.date.relative.Unit
-    goog.date.relativeWithPlurals
     goog.date.weekDay
     goog.format
     goog.format.EmailAddress
@@ -95,7 +92,6 @@
     goog.locale
     goog.locale.TimeZoneFingerprint
     goog.locale.defaultLocaleNameConstants
-    goog.locale.genericFontNames
     goog.locale.timeZoneDetection
     goog.math
     goog.math.AffineTransform
@@ -148,5 +144,4 @@
     goog.structs.SimplePool
     goog.structs.StringSet
     goog.structs.TreeNode
-    goog.structs.Trie
-    goog.text.LoremIpsum))
+    goog.structs.Trie))

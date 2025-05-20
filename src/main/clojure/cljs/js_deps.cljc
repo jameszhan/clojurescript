@@ -8,6 +8,7 @@
 
 (ns cljs.js-deps
   (:require [cljs.util :as util :refer [distinct-by]]
+            [cljs.vendor.clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as string])
   (:import [java.io File]
@@ -114,16 +115,24 @@ case."
   (letfn [(conj-in [m k v] (update-in m [k] (fn [old] (conj old v))))]
     (->> (for [line lines x (string/split line #";")] x)
          (map string/trim)
+         (drop-while #(not (or (string/includes? % "goog.provide(")
+                               (string/includes? % "goog.module(")
+                               (string/includes? % "goog.require(")
+                               (string/includes? % "goog.requireType("))))
          (take-while #(not (re-matches #".*=[\s]*function\(.*\)[\s]*[{].*" %)))
-         (map #(re-matches #".*goog\.(provide|require)\(['\"](.*)['\"]\)" %))
+         (map #(re-matches #".*goog\.(provide|module|require|requireType)\(['\"](.*)['\"]\)" %))
          (remove nil?)
          (map #(drop 1 %))
          (reduce (fn [m ns]
                    (let [munged-ns (string/replace (last ns) "_" "-")]
-                     (if (= (first ns) "require")
-                       (conj-in m :requires munged-ns)
-                       (conj-in m :provides munged-ns))))
-                 {:requires [] :provides []}))))
+                     (case (first ns)
+                       "provide"     (conj-in m :provides munged-ns)
+                       "module"      (-> m
+                                       (conj-in :provides munged-ns)
+                                       (assoc :module :goog))
+                       "require"     (conj-in m :requires munged-ns)
+                       "requireType" (conj-in m :require-types munged-ns))))
+                 {:requires [] :provides [] :require-types []}))))
 
 (defprotocol IJavaScript
   (-foreign? [this] "Whether the Javascript represents a foreign
@@ -179,8 +188,8 @@ case."
           (if-let [file (get-file dep index')]
             (update-in index' [file] lib-spec-merge dep)
             (throw
-              (Exception.
-                (str "No :file provided for :foreign-libs spec " (pr-str dep)))))
+              (util/compilation-error (Exception.
+                                        (str "No :file provided for :foreign-libs spec " (pr-str dep))))))
           (assoc index' (:file dep) dep))))
     {} deps))
 
@@ -311,22 +320,39 @@ JavaScript library containing provide/require 'declarations'."
 ;        (re-find #"(\/google-closure-library-0.0*|\/google-closure-library\/)" (.getPath ^URL res)))
 ;      (enumeration-seq (.getResources (.getContextClassLoader (Thread/currentThread)) path)))))
 
+;; NOTE: because this looks at deps.js for indexing the Closure Library we
+;; don't need to bother parsing files in Closure Library. But it's also a
+;; potential source of confusion as *other* Closure style libs will need to be
+;; parsed, user won't typically provide a deps.js
 (defn goog-dependencies*
-  "Create an index of Google dependencies by namespace and file name."
+  "Create an index of Google dependencies by namespace and file name from
+  goog/deps.js"
   []
   (letfn [(parse-list [s] (when (> (count s) 0)
                             (-> (.substring ^String s 1 (dec (count s)))
                                 (string/split #"'\s*,\s*'"))))]
     (with-open [reader (io/reader (io/resource "goog/deps.js"))]
       (->> (line-seq reader)
-           (map #(re-matches #"^goog\.addDependency\(['\"](.*)['\"],\s*\[(.*)\],\s*\[(.*)\],.*\);.*" %))
+           (map #(re-matches #"^goog\.addDependency\(['\"](.*)['\"],\s*\[(.*)\],\s*\[(.*)\],\s*(\{.*\})\);.*" %))
            (remove nil?)
            (map #(drop 1 %))
            (remove #(.startsWith ^String (first %) "../../third_party"))
-           (map #(hash-map :file (str "goog/" (nth % 0))
-                           :provides (parse-list (nth % 1))
-                           :requires (parse-list (nth % 2))
-                           :group :goog))
+           (map
+             (fn [[file provides requires load-opts-str]]
+               (let [{:strs [lang module]}
+                     (-> (string/replace load-opts-str "'" "\"") (json/read-str))
+                     file' (str "goog/" file)]
+                 (merge
+                   {:file          file'
+                    :provides      (parse-list provides)
+                    :requires      (parse-list requires)
+                    :require-types (-> file' io/resource io/reader line-seq
+                                     parse-js-ns :require-types)
+                    :group         :goog}
+                   (when module
+                     {:module (keyword module)})
+                   (when lang
+                     {:lang (keyword lang)})))))
            (doall)))))
 
 (def goog-dependencies (memoize goog-dependencies*))

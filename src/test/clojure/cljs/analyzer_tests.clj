@@ -7,33 +7,30 @@
 ;; You must not remove this notice, or any other, from this software.
 
 (ns cljs.analyzer-tests
-  (:require [clojure.java.io :as io]
-            [cljs.util :as util]
-            [clojure.set :as set]
-            [cljs.env :as e]
-            [cljs.env :as env]
-            [cljs.analyzer :as a]
-            [cljs.analyzer.api :as ana-api]
-            [cljs.compiler :as comp]
-            [cljs.closure :as closure]
-            [cljs.externs :as externs]
-            [cljs.analyzer :as ana]
-            [clojure.string :as string]
-            [cljs.test-util :refer [unsplit-lines]])
-  (:use clojure.test))
+  (:require
+    [cljs.analyzer :as ana]
+    [cljs.analyzer.api :as ana-api]
+    [cljs.compiler :as comp]
+    [cljs.env :as env]
+    [cljs.test-util :refer [unsplit-lines]]
+    [cljs.util :as util]
+    [clojure.java.io :as io]
+    [clojure.set :as set]
+    [clojure.string :as string]
+    [clojure.test :refer [is are deftest testing]]))
 
 (defn analyze
   ([env form]
-   (env/ensure (a/analyze env form)))
+   (env/ensure (ana/analyze env form)))
   ([env form name]
-   (env/ensure (a/analyze env form name)))
+   (env/ensure (ana/analyze env form name)))
   ([env form name opts]
-   (env/ensure (a/analyze env form name opts))))
+   (env/ensure (ana/analyze env form name opts))))
 
 (defn collecting-warning-handler [state]
   (fn [warning-type env extra]
-    (when (warning-type a/*cljs-warnings*)
-      (when-let [s (a/error-message warning-type extra)]
+    (when (warning-type ana/*cljs-warnings*)
+      (when-let [s (ana/error-message warning-type extra)]
         (swap! state conj s)))))
 
 ;;******************************************************************************
@@ -49,289 +46,162 @@
 (defn warn-count [form]
   (let [counter (atom 0)
         tracker (fn [warning-type env & [extra]]
-                  (when (warning-type a/*cljs-warnings*)
+                  (when (warning-type ana/*cljs-warnings*)
                     (swap! counter inc)))]
-    (a/with-warning-handlers [tracker]
-      (analyze (a/empty-env) form))
+    (ana/with-warning-handlers [tracker]
+      (analyze (ana/empty-env) form))
     @counter))
 
 (deftest no-warn
-  (is (every? zero? (map (fn [[name form]] (a/no-warn (warn-count form))) warning-forms))))
+  (is (every? zero? (map (fn [[name form]] (ana/no-warn (warn-count form))) warning-forms))))
 
 (deftest all-warn
-  (is (every? #(= 1 %) (map (fn [[name form]] (a/all-warn (warn-count form))) warning-forms))))
+  (is (every? #(= 1 %) (map (fn [[name form]] (ana/all-warn (warn-count form))) warning-forms))))
 
 ;; =============================================================================
 ;; NS parsing
 
-(def ns-env (assoc-in (a/empty-env) [:ns :name] 'cljs.user))
+(def ns-env (assoc-in (ana/empty-env) [:ns :name] 'cljs.user))
 
 (deftest spec-validation
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:require {:foo :bar})))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only [lib.ns & options] and lib.ns specs supported in :require / :require-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:require [:foo :bar])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Library name must be specified as a symbol in :require / :require-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:require [baz.woz :as woz :refer [] :plop])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only :as alias, :refer (names) and :rename {from to} options supported in :require"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:require [baz.woz :as woz :refer [] :plop true])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only :as, :refer and :rename options supported in :require / :require-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:require [baz.woz :as woz :refer [] :as boz :refer []])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Each of :as and :refer options may only be specified once in :require / :require-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:refer-clojure :refer [])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only [:refer-clojure :exclude (names)] and optionally `:rename {from to}` specs supported"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:refer-clojure :rename [1 2])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only [:refer-clojure :exclude (names)] and optionally `:rename {from to}` specs supported"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:use [baz.woz :exclude []])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only [lib.ns :only (names)] and optionally `:rename {from to}` specs supported in :use / :use-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:use [baz.woz])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only [lib.ns :only (names)] and optionally `:rename {from to}` specs supported in :use / :use-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:use [baz.woz :only])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only [lib.ns :only (names)] and optionally `:rename {from to}` specs supported in :use / :use-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:use [baz.woz :only [1 2 3]])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only [lib.ns :only (names)] and optionally `:rename {from to}` specs supported in :use / :use-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:use [baz.woz :rename [1 2]])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only [lib.ns :only (names)] and optionally `:rename {from to}` specs supported in :use / :use-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:use [foo.bar :rename {baz qux}])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only [lib.ns :only (names)] and optionally `:rename {from to}` specs supported in :use / :use-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:use [baz.woz :only [foo] :only [bar]])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Each of :only and :rename options may only be specified once in :use / :use-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:require [baz.woz :as []])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         ":as must be followed by a symbol in :require / :require-macros"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:require [baz.woz :as woz] [noz.goz :as woz])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         ":as alias must be unique"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:require [foo.bar :rename {baz qux}])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Renamed symbol baz not referred"))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:unless [])))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only :refer-clojure, :require, :require-macros, :use, :use-macros, and :import libspecs supported. Got (:unless []) instead."))
   (is (.startsWith
         (try
           (analyze ns-env '(ns foo.bar (:require baz.woz) (:require noz.goz)))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Only one ")))
 
-;; =============================================================================
-;; Inference tests
+(def test-cenv (env/default-compiler-env))
+(def test-env (assoc-in (ana/empty-env) [:ns :name] 'cljs.core))
+(def test-core-env (env/default-compiler-env))
 
-(def test-cenv (atom {}))
-(def test-env (assoc-in (a/empty-env) [:ns :name] 'cljs.core))
+(binding [ana/*unchecked-if* false
+          ana/*analyze-deps* false]
+  (env/with-compiler-env test-core-env
+    (comp/with-core-cljs nil
+      (fn []))))
 
-(a/no-warn
-  (e/with-compiler-env test-cenv
-    (binding [a/*analyze-deps* false]
-      (a/analyze-file (io/file "src/main/cljs/cljs/core.cljs")))))
+(defn core-env []
+  (atom @test-core-env))
 
-(deftest basic-inference
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '1)))
-         'number))
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '"foo")))
-         'string))
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '\a)))
-        'string))
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '(make-array 10))))
-         'array))
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '(js-obj))))
-         'object))
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '[])))
-         'cljs.core/IVector))
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '{})))
-         'cljs.core/IMap))
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '#{})))
-         'cljs.core/ISet))
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env ())))
-         'cljs.core/IList))
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '(fn [x] x))))
-         'function)))
+(defn analyze-forms [cenv xs]
+  (binding [ana/*unchecked-if* false
+            ana/*analyze-deps* false]
+    (env/with-compiler-env cenv
+      (ana/analyze-form-seq xs))))
 
-(deftest if-inference
-  (is (= (a/no-warn
-           (e/with-compiler-env test-cenv
-             (:tag (analyze test-env '(if x "foo" 1)))))
-         '#{number string})))
-
-(deftest method-inference
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '(.foo js/bar))))
-         'js)))
-
-(deftest fn-inference
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env
-  ;                 '(let [x (fn ([a] 1) ([a b] "foo") ([a b & r] ()))]
-  ;                    (x :one)))))
-  ;      'number))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env
-  ;                 '(let [x (fn ([a] 1) ([a b] "foo") ([a b & r] ()))]
-  ;                    (x :one :two)))))
-  ;      'string))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env
-  ;                 '(let [x (fn ([a] 1) ([a b] "foo") ([a b & r] ()))]
-  ;                    (x :one :two :three)))))
-  ;      'cljs.core/IList))
-  )
-
-(deftest lib-inference
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '(+ 1 2))))
-         'number))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(alength (array)))))
-  ;       'number))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(aclone (array)))))
-  ;       'array))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(-count [1 2 3]))))
-  ;      'number))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(count [1 2 3]))))
-  ;       'number))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(into-array [1 2 3]))))
-  ;       'array))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(js-obj))))
-  ;       'object))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(-conj [] 1))))
-  ;       'clj))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(conj [] 1))))
-  ;       'clj))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(assoc nil :foo :bar))))
-  ;       'clj))
-  ;(is (= (e/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(dissoc {:foo :bar} :foo))))
-  ;       '#{clj clj-nil}))
-  )
-
-(deftest test-always-true-if
-  (is (= (e/with-compiler-env test-cenv
-           (:tag (analyze test-env '(if 1 2 "foo"))))
-         'number)))
-
-;; will only work if the previous test works
-(deftest test-count
-  ;(is (= (cljs.env/with-compiler-env test-cenv
-  ;         (:tag (analyze test-env '(count []))))
-  ;       'number))
-  )
-
-(deftest test-numeric
-  ;(is (= (a/no-warn
-  ;         (cljs.env/with-compiler-env test-cenv
-  ;           (:tag (analyze test-env '(dec x)))))
-  ;       'number))
-  ;(is (= (a/no-warn
-  ;         (cljs.env/with-compiler-env test-cenv
-  ;           (:tag (analyze test-env '(int x)))))
-  ;       'number))
-  ;(is (= (a/no-warn
-  ;         (cljs.env/with-compiler-env test-cenv
-  ;           (:tag (analyze test-env '(unchecked-int x)))))
-  ;       'number))
-  ;(is (= (a/no-warn
-  ;         (cljs.env/with-compiler-env test-cenv
-  ;           (:tag (analyze test-env '(mod x y)))))
-  ;       'number))
-  ;(is (= (a/no-warn
-  ;         (cljs.env/with-compiler-env test-cenv
-  ;           (:tag (analyze test-env '(quot x y)))))
-  ;       'number))
-  ;(is (= (a/no-warn
-  ;         (cljs.env/with-compiler-env test-cenv
-  ;           (:tag (analyze test-env '(rem x y)))))
-  ;       'number))
-  ;(is (= (a/no-warn
-  ;         (cljs.env/with-compiler-env test-cenv
-  ;           (:tag (analyze test-env '(bit-count n)))))
-  ;       'number))
-  )
+(ana/no-warn
+  (env/with-compiler-env test-cenv
+    (binding [ana/*analyze-deps* false]
+      (ana/analyze-file (io/file "src/main/cljs/cljs/core.cljs")))))
 
 ;; =============================================================================
 ;; Catching errors during macroexpansion
@@ -341,7 +211,7 @@
         (try
           (analyze test-env '(defn foo 123))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Parameter declaration \"123\" should be a vector")))
 
 ;; =============================================================================
@@ -349,25 +219,25 @@
 
 (deftest test-cljs-975
   (let [spec '((:require [bar :refer [baz] :refer-macros [quux]] :reload))]
-    (is (= (set (a/desugar-ns-specs spec))
+    (is (= (set (ana/desugar-ns-specs spec))
            (set '((:require-macros (bar :refer [quux]) :reload)
                   (:require (bar :refer [baz]) :reload)))))))
 
 (deftest test-rewrite-cljs-aliases
-  (is (= (a/rewrite-cljs-aliases
+  (is (= (ana/rewrite-cljs-aliases
            '((:require-macros (bar :refer [quux]) :reload)
              (:require (clojure.spec.alpha :as s :refer [fdef]) :reload)))
          '((:require-macros (bar :refer [quux]) :reload)
            (:require (cljs.spec.alpha :as s :refer [fdef])
                      (cljs.spec.alpha :as clojure.spec.alpha) :reload))))
-  (is (= (a/rewrite-cljs-aliases
+  (is (= (ana/rewrite-cljs-aliases
            '((:refer-clojure :exclude [first])
               (:require-macros (bar :refer [quux]) :reload)
               (:require (clojure.spec.alpha :as s) :reload)))
          '((:refer-clojure :exclude [first])
            (:require-macros (bar :refer [quux]) :reload)
            (:require (cljs.spec.alpha :as s) (cljs.spec.alpha :as clojure.spec.alpha) :reload))))
-  (is (= (a/rewrite-cljs-aliases
+  (is (= (ana/rewrite-cljs-aliases
            '((:require-macros (bar :refer [quux]) :reload)
              (:require clojure.spec.alpha :reload)))
          '((:require-macros (bar :refer [quux]) :reload)
@@ -377,21 +247,21 @@
 ;; Namespace metadata
 
 (deftest test-namespace-metadata
-  (binding [a/*cljs-ns* a/*cljs-ns*]
+  (binding [ana/*cljs-ns* ana/*cljs-ns*]
     (is (= (do (analyze ns-env '(ns weeble.ns {:foo bar}))
-               (meta a/*cljs-ns*))
+               (meta ana/*cljs-ns*))
            {:foo 'bar}))
 
     (is (= (do (analyze ns-env '(ns ^{:foo bar} weeble.ns))
-               (meta a/*cljs-ns*))
+               (meta ana/*cljs-ns*))
            {:foo 'bar}))
 
     (is (= (do (analyze ns-env '(ns ^{:foo bar} weeble.ns {:baz quux}))
-               (meta a/*cljs-ns*))
+               (meta ana/*cljs-ns*))
            {:foo 'bar :baz 'quux}))
 
     (is (= (do (analyze ns-env '(ns ^{:foo bar} weeble.ns {:foo baz}))
-               (meta a/*cljs-ns*))
+               (meta ana/*cljs-ns*))
            {:foo 'baz}))
 
     (is (= (meta (:name (analyze ns-env '(ns weeble.ns {:foo bar}))))
@@ -408,18 +278,18 @@
 
 (deftest test-cljs-1105
   ;; munge turns - into _, must preserve the dash first
-  (is (not= (a/gen-constant-id :test-kw)
-            (a/gen-constant-id :test_kw))))
+  (is (not= (ana/gen-constant-id :test-kw)
+            (ana/gen-constant-id :test_kw))))
 
 (deftest test-symbols-munge-cljs-1432
-  (is (not= (a/gen-constant-id :$)
-            (a/gen-constant-id :.)))
-  (is (not= (a/gen-constant-id '$)
-            (a/gen-constant-id '.))))
+  (is (not= (ana/gen-constant-id :$)
+            (ana/gen-constant-id :.)))
+  (is (not= (ana/gen-constant-id '$)
+            (ana/gen-constant-id '.))))
 
 (deftest test-unicode-munging-cljs-1457
-  (is (= (a/gen-constant-id :C♯) 'cst$kw$C_u266f_)
-      (= (a/gen-constant-id 'C♯) 'cst$sym$C_u266f_)))
+  (is (= (ana/gen-constant-id :C♯) 'cst$kw$C_u266f_)
+      (= (ana/gen-constant-id 'C♯) 'cst$sym$C_u266f_)))
 
 ;; Constants
 
@@ -428,18 +298,18 @@
         (try
           (analyze test-env '(do (def ^:const foo 123)  (def foo 246)))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Can't redefine a constant"))
   (is (.startsWith
         (try
           (analyze test-env '(do (def ^:const foo 123)  (set! foo 246)))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Can't set! a constant")))
 
 (deftest test-cljs-1508-rename
-  (binding [a/*cljs-ns* a/*cljs-ns*]
-    (let [parsed-ns (e/with-compiler-env test-cenv
+  (binding [ana/*cljs-ns* ana/*cljs-ns*]
+    (let [parsed-ns (env/with-compiler-env test-cenv
                       (analyze test-env
                         '(ns foo.core
                            (:require [clojure.set :as set :refer [intersection] :rename {intersection foo}]))))]
@@ -448,52 +318,52 @@
       (is (some? (-> parsed-ns :renames (get 'foo))))
       (is (= (-> parsed-ns :renames (get 'foo))
              'clojure.set/intersection)))
-    (is (e/with-compiler-env test-cenv
+    (is (env/with-compiler-env test-cenv
           (analyze test-env
             '(ns foo.core
                (:use [clojure.set :only [intersection] :rename {intersection foo}])))))
-    (is (= (e/with-compiler-env (atom {::a/namespaces
+    (is (= (env/with-compiler-env (atom {::ana/namespaces
                                        {'foo.core {:renames '{foo clojure.set/intersection}}}})
-             (select-keys (a/resolve-var {:ns {:name 'foo.core}} 'foo)
+             (select-keys (ana/resolve-var {:ns {:name 'foo.core}} 'foo)
                           [:name :ns]))
            '{:name clojure.set/intersection
              :ns   clojure.set}))
-    (let [rwhen (e/with-compiler-env (atom (update-in @test-cenv [::a/namespaces]
+    (let [rwhen (env/with-compiler-env (atom (update-in @test-cenv [::ana/namespaces]
                                              merge {'foo.core {:rename-macros '{always cljs.core/when}}}))
-                  (a/resolve-macro-var {:ns {:name 'foo.core}} 'always))]
+                  (ana/resolve-macro-var {:ns {:name 'foo.core}} 'always))]
       (is (= (-> rwhen :name)
              'cljs.core/when)))
-    (let [parsed-ns (e/with-compiler-env test-cenv
+    (let [parsed-ns (env/with-compiler-env test-cenv
                       (analyze test-env
                         '(ns foo.core
                            (:refer-clojure :rename {when always
                                                     map  core-map}))))]
-      (is (= (-> parsed-ns :excludes) #{}))
+      (is (= (-> parsed-ns :excludes) '#{when map}))
       (is (= (-> parsed-ns :rename-macros) '{always cljs.core/when}))
       (is (= (-> parsed-ns :renames) '{core-map cljs.core/map})))
-    (is (thrown? Exception (e/with-compiler-env test-cenv
+    (is (thrown? Exception (env/with-compiler-env test-cenv
                              (analyze test-env
                                '(ns foo.core
                                   (:require [clojure.set :rename {intersection foo}]))))))))
 
 (deftest test-cljs-1274
-  (let [test-env (assoc-in (a/empty-env) [:ns :name] 'cljs.user)]
-    (binding [a/*cljs-ns* a/*cljs-ns*]
-      (is (thrown-with-msg? Exception #"Can't def ns-qualified name in namespace foo.core"
+  (let [test-env (assoc-in (ana/empty-env) [:ns :name] 'cljs.user)]
+    (binding [ana/*cljs-ns* ana/*cljs-ns*]
+      (is (thrown-with-cause-msg? Exception #"Can't def ns-qualified name in namespace foo.core"
             (analyze test-env '(def foo.core/foo 43))))
       (is (analyze test-env '(def cljs.user/foo 43))))))
 
 (deftest test-cljs-1702
   (let [ws (atom [])]
-    (a/with-warning-handlers [(collecting-warning-handler ws)]
-      (e/with-compiler-env test-cenv
-        (a/analyze-form-seq
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
+      (env/with-compiler-env test-cenv
+        (ana/analyze-form-seq
           '[(ns test.cljs-1702-a)
             (def ^:private a 3)
             (def ^:private b 3)
             (defn- test-fn-a [a] a)
             (defn- test-fn-b [a] b)])
-        (a/analyze-form-seq
+        (ana/analyze-form-seq
           '[(ns test.cljs-1702-b)
             (test.cljs-1702-a/test-fn-a 1)
             (#'test.cljs-1702-a/test-fn-b 1)
@@ -503,15 +373,23 @@
               "var: test.cljs-1702-a/a is not public"] @ws)))))
 
 (deftest test-cljs-1763
-  (let [parsed (a/parse-ns-excludes {} '())]
+  (let [parsed (ana/parse-ns-excludes {} '())]
     (is (= parsed
            {:excludes #{}
             :renames {}}))
     (is (set? (:excludes parsed)))))
 
+
+(deftest test-cljs-2292
+  (let [parsed (ana/parse-ns-excludes {} '((:refer-clojure :rename {map clj-map})))]
+    (is (= parsed
+          '{:excludes #{map}
+            :renames  {map clj-map}}))
+    (is (set? (:excludes parsed)))))
+
 (deftest test-cljs-1785-js-shadowed-by-local
   (let [ws (atom [])]
-    (a/with-warning-handlers [(collecting-warning-handler ws)]
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
       (analyze ns-env
         '(fn [foo]
            (let [x js/foo]
@@ -521,62 +399,83 @@
 (deftest test-cljs-2005
   (let [ws (atom [])]
     (try
-      (a/with-warning-handlers [(collecting-warning-handler ws)]
-        (analyze (a/empty-env)
+      (ana/with-warning-handlers [(collecting-warning-handler ws)]
+        (analyze (ana/empty-env)
           '(defn myfun
              ([x] x)
              ([x] x))))
       (catch Exception _))
     (is (.startsWith (first @ws) "myfun: Can't have 2 overloads with same arity"))))
 
+(deftest test-cljs-2863
+  (let [ws (atom [])]
+    (try
+      (ana/with-warning-handlers [(collecting-warning-handler ws)]
+       (analyze (ana/empty-env)
+                '(defn myfun
+                   ([x] x)
+                   ([& xs] xs))))
+      (catch Exception _))
+    (is (.startsWith (first @ws) "myfun: Can't have fixed arity function with more params than variadic function")))
+
+  (let [ws (atom [])]
+    (try
+      (ana/with-warning-handlers [(collecting-warning-handler ws)]
+       (analyze (ana/empty-env)
+                '(defn myfun
+                   ([& x] x)
+                   ([& xs] xs))))
+      (catch Exception _))
+    (is (.startsWith (first @ws) "myfun: Can't have more than 1 variadic overload"))))
+
 (deftest test-canonicalize-specs
-  (is (= (a/canonicalize-specs '((quote [clojure.set :as set])))
+  (is (= (ana/canonicalize-specs '((quote [clojure.set :as set])))
          '([clojure.set :as set])))
-  (is (= (a/canonicalize-specs '(:exclude (quote [map mapv])))
+  (is (= (ana/canonicalize-specs '(:exclude (quote [map mapv])))
          '(:exclude [map mapv])))
-  (is (= (a/canonicalize-specs '(:require (quote [clojure.set :as set])))
+  (is (= (ana/canonicalize-specs '(:require (quote [clojure.set :as set])))
          '(:require [clojure.set :as set])))
-  (is (= (a/canonicalize-specs '(:require (quote clojure.set)))
+  (is (= (ana/canonicalize-specs '(:require (quote clojure.set)))
          '(:require [clojure.set])))
-  (is (= (a/canonicalize-specs '(:refer-clojure :exclude '[map] :rename '{map core-map}))
+  (is (= (ana/canonicalize-specs '(:refer-clojure :exclude '[map] :rename '{map core-map}))
          '(:refer-clojure :exclude [map] :rename {map core-map}))))
 
 (deftest test-canonicalize-import-specs
-  (is (= (a/canonicalize-import-specs '(:import (quote [goog Uri])))
+  (is (= (ana/canonicalize-import-specs '(:import (quote [goog Uri])))
          '(:import [goog Uri])))
-  (is (= (a/canonicalize-import-specs '(:import (quote (goog Uri))))
+  (is (= (ana/canonicalize-import-specs '(:import (quote (goog Uri))))
          '(:import (goog Uri))))
-  (is (= (a/canonicalize-import-specs '(:import (quote goog.Uri)))
+  (is (= (ana/canonicalize-import-specs '(:import (quote goog.Uri)))
          '(:import goog.Uri))))
 
 (deftest test-cljs-1346
   (testing "`ns*` special form conformance"
-    (let [test-env (a/empty-env)]
-      (is (= (-> (a/parse-ns '((require '[clojure.set :as set]))) :requires)
+    (let [test-env (ana/empty-env)]
+      (is (= (-> (ana/parse-ns '((require '[clojure.set :as set]))) :requires)
             '#{cljs.core clojure.set})))
-    (binding [a/*cljs-ns* a/*cljs-ns*
-              a/*cljs-warnings* nil]
-      (let [test-env (a/empty-env)]
+    (binding [ana/*cljs-ns* ana/*cljs-ns*
+              ana/*cljs-warnings* nil]
+      (let [test-env (ana/empty-env)]
         (is (= (-> (analyze test-env '(require '[clojure.set :as set])) :requires vals set)
               '#{clojure.set})))
-      (let [test-env (a/empty-env)]
+      (let [test-env (ana/empty-env)]
         (is (= (-> (analyze test-env '(require '[clojure.set :as set :refer [union intersection]])) :uses keys set)
               '#{union intersection})))
-      (let [test-env (a/empty-env)]
+      (let [test-env (ana/empty-env)]
         (is (= (-> (analyze test-env '(require '[clojure.set :as set]
                                           '[clojure.string :as str]))
                  :requires vals set)
               '#{clojure.set clojure.string})))
-      (let [test-env (a/empty-env)]
+      (let [test-env (ana/empty-env)]
         (is (= (-> (analyze test-env '(require-macros '[cljs.test :as test])) :require-macros vals set)
               '#{cljs.test})))
-      (let [test-env (a/empty-env)
+      (let [test-env (ana/empty-env)
             parsed (analyze test-env '(require-macros '[cljs.test :as test  :refer [deftest is]]))]
         (is (= (-> parsed :require-macros vals set)
               '#{cljs.test}))
         (is (= (-> parsed :use-macros keys set)
               '#{is deftest})))
-      (let [test-env (a/empty-env)
+      (let [test-env (ana/empty-env)
             parsed (analyze test-env '(require '[cljs.test :as test :refer-macros [deftest is]]))]
         (is (= (-> parsed :requires vals set)
               '#{cljs.test}))
@@ -584,46 +483,46 @@
               '#{cljs.test}))
         (is (= (-> parsed :use-macros keys set)
               '#{is deftest})))
-      (let [test-env (a/empty-env)
+      (let [test-env (ana/empty-env)
             parsed (analyze test-env '(use '[clojure.set :only [intersection]]))]
         (is (= (-> parsed :uses keys set)
               '#{intersection}))
         (is (= (-> parsed :requires)
               '{clojure.set clojure.set})))
-      (let [test-env (a/empty-env)
+      (let [test-env (ana/empty-env)
             parsed (analyze test-env '(use-macros '[cljs.test :only [deftest is]]))]
         (is (= (-> parsed :use-macros keys set)
               '#{deftest is}))
         (is (= (-> parsed :require-macros)
               '{cljs.test cljs.test}))
         (is (nil? (-> parsed :requires))))
-      (let [test-env (a/empty-env)
+      (let [test-env (ana/empty-env)
             parsed (analyze test-env '(import '[goog.math Long Integer]))]
         (is (= (-> parsed :imports)
               (-> parsed :requires)
               '{Long goog.math.Long
                 Integer goog.math.Integer})))
-      (let [test-env (a/empty-env)
+      (let [test-env (ana/empty-env)
             parsed (analyze test-env '(refer-clojure :exclude '[map mapv]))]
         (is (= (-> parsed :excludes)
               '#{map mapv})))
-      (let [test-env (a/empty-env)
+      (let [test-env (ana/empty-env)
             parsed (analyze test-env '(refer-clojure :exclude '[map mapv] :rename '{mapv core-mapv}))]
         (is (= (-> parsed :excludes)
               '#{map mapv})))))
   (testing "arguments to require should be quoted"
-    (binding [a/*cljs-ns* a/*cljs-ns*
-              a/*cljs-warnings* nil]
-      (is (thrown-with-msg? Exception #"Arguments to require must be quoted"
+    (binding [ana/*cljs-ns* ana/*cljs-ns*
+              ana/*cljs-warnings* nil]
+      (is (thrown-with-cause-msg? Exception #"Arguments to require must be quoted"
             (analyze test-env
               '(require [clojure.set :as set]))))
-      (is (thrown-with-msg? Exception #"Arguments to require must be quoted"
+      (is (thrown-with-cause-msg? Exception #"Arguments to require must be quoted"
             (analyze test-env
               '(require clojure.set))))))
   (testing "`:ns` and `:ns*` should throw if not `:top-level`"
-    (binding [a/*cljs-ns* a/*cljs-ns*
-              a/*cljs-warnings* nil]
-      (are [analyzed] (thrown-with-msg? Exception
+    (binding [ana/*cljs-ns* ana/*cljs-ns*
+              ana/*cljs-warnings* nil]
+      (are [analyzed] (thrown-with-cause-msg? Exception
                         #"Namespace declarations must appear at the top-level."
                         analyzed)
           (analyze test-env
@@ -637,7 +536,7 @@
         (analyze test-env
           '(map #(ns foo.core
                    (:require [clojure.set :as set])) [1 2])))
-      (are [analyzed] (thrown-with-msg? Exception
+      (are [analyzed] (thrown-with-cause-msg? Exception
                         #"Calls to `require` must appear at the top-level."
                         analyzed)
         (analyze test-env
@@ -652,23 +551,23 @@
   ;; note: can't use `with-redefs` because direct-linking is enabled
   (let [s   "src/cljs/foo.cljs"
         sha (util/content-sha s)]
-    (is (= (a/gen-user-ns s) (symbol (str "cljs.user.foo" (apply str (take 7 sha)))))))
+    (is (= (ana/gen-user-ns s) (symbol (str "cljs.user.foo" (apply str (take 7 sha)))))))
   (let [a   "src/cljs/foo.cljs"
         b   "src/cljs/foo.cljc"]
     ;; namespaces should have different names because the filename hash will be different
-    (is (not= (a/gen-user-ns a) (a/gen-user-ns b)))
+    (is (not= (ana/gen-user-ns a) (ana/gen-user-ns b)))
     ;; specifically, only the hashes should differ
-    (let [nsa (str (a/gen-user-ns a))
-          nsb (str (a/gen-user-ns b))]
+    (let [nsa (str (ana/gen-user-ns a))
+          nsb (str (ana/gen-user-ns b))]
       (is (not= (.substring nsa (- (count nsa) 7)) (.substring nsb (- (count nsb) 7))))
       (is (= (.substring nsa 0 (- (count nsa) 7)) (.substring nsb 0 (- (count nsb) 7)))))))
 
 (deftest test-cljs-1536
-  (let [parsed (e/with-compiler-env test-cenv
+  (let [parsed (env/with-compiler-env test-cenv
                  (analyze (assoc test-env :def-emits-var true)
                    '(def x 1)))]
     (is (some? (:var-ast parsed))))
-  (let [parsed (e/with-compiler-env test-cenv
+  (let [parsed (env/with-compiler-env test-cenv
                  (analyze (assoc test-env :def-emits-var true)
                    '(let [y 1] (def y 2))))]
     (is (some? (-> parsed :body :ret :var-ast)))))
@@ -676,15 +575,15 @@
 (def analyze-ops-cenv (atom @test-cenv))
 
 (defn ana' [form]
-  (e/with-compiler-env analyze-ops-cenv
+  (env/with-compiler-env analyze-ops-cenv
     (analyze test-env form)))
 
 (defmacro ana [form]
   `(ana' '~form))
 
 (defn prs-ana [fstr]
-  (e/with-compiler-env analyze-ops-cenv
-    (let [[form] (a/forms-seq*
+  (env/with-compiler-env analyze-ops-cenv
+    (let [[form] (ana/forms-seq*
                    (java.io.StringReader. fstr))]
       (ana' form))))
 
@@ -705,7 +604,7 @@
   ;; dotted :var
   (is (= [:host-field 'bar :host-field 'foo :var 'cljs.core/inc 'cljs.core/inc]
          (-> (ana inc.foo.bar)
-             ((juxt :op 
+             ((juxt :op
                     :field
                     (comp :op :target)
                     (comp :field :target)
@@ -715,7 +614,7 @@
   ;; dotted :local
   (is (= [:host-field 'c :host-field 'b :local 'a 'a]
          (-> (ana (let [a 1] a.b.c)) :body :ret
-             ((juxt :op 
+             ((juxt :op
                     :field
                     (comp :op :target)
                     (comp :field :target)
@@ -753,9 +652,9 @@
   (is (= (-> (ana (let [a 1] a)) :body :ret :form) 'a))
   (is (map? (-> (ana (let [a 1] a)) :body :ret :env)))
   ;; dotted :local
-  (is (= [:host-field 'c :host-field 'b :local 'a] 
+  (is (= [:host-field 'c :host-field 'b :local 'a]
          (-> (ana (let [a 1] a.b.c)) :body :ret
-             ((juxt :op 
+             ((juxt :op
                     :field
                     (comp :op :target)
                     (comp :field :target)
@@ -763,12 +662,12 @@
                     (comp :name :target :target))))))
   ;local shadow
   (is (= 'alert
-         (a/no-warn (-> (ana (let [alert 1] js/alert)) :body 
+         (ana/no-warn (-> (ana (let [alert 1] js/alert)) :body
                         :env :locals
                         (get 'alert)
                         :name))))
   (is (= [:local 'alert]
-         (a/no-warn (-> (ana (let [alert 1] js/alert)) :body :ret 
+         (ana/no-warn (-> (ana (let [alert 1] js/alert)) :body :ret
                         ((juxt :op :name))))))
   ;loop
   (is (= (-> (ana (loop [])) :op) :loop))
@@ -799,7 +698,7 @@
   ;   :finally
   (is (= (-> (ana (try (finally 1))) :finally :op) :do))
   (is (= (-> (ana (try (finally 1))) :finally :ret :op) :const))
-  ;TODO case 
+  ;TODO case
   (is (= (-> (ana (case 1)) :op) :let))
   (is (= (-> (ana (case 1)) :body :ret :op) :case))
   (is (= (-> (ana (case 1)) :body :ret :children) [:test :nodes :default]))
@@ -842,7 +741,7 @@
   ;   :ns/:name
   (is (= ['cljs.core 'cljs.core/a] (-> (ana (def a 1)) ((juxt :ns :name)))))
   ;   :var
-  (is (= [:var 'cljs.core 'cljs.core/a 'a] 
+  (is (= [:var 'cljs.core 'cljs.core/a 'a]
          (-> (ana (def a 1)) :var
              ((juxt :op :ns :name :form)))))
   ;   :init
@@ -855,9 +754,9 @@
   (is (= :do (-> (ana (deftype A [a] Object (toString [this] a))) :statements first :body :op)))
         ; field reference
   (is (= [:local :field]
-         (-> (ana (deftype A [a] Object (toString [this] a))) 
+         (-> (ana (deftype A [a] Object (toString [this] a)))
              :statements first :body :ret :val :methods
-             first :body :ret :body :ret 
+             first :body :ret :body :ret
              ((juxt :op :local)))))
   ;defrecord
   (is (= :defrecord (-> (ana (defrecord Ab [])) :body :statements first :ret :op)))
@@ -918,10 +817,10 @@
          (-> (ana (fn [])) :methods first :params)))
   (is (vector?
          (-> (ana (fn [a b])) :methods first :params)))
-  (is (= [:binding 'a :arg] 
+  (is (= [:binding 'a :arg]
          (-> (ana (fn [a b])) :methods first :params
              first ((juxt :op :name :local)))))
-  (is (= [:binding 'b :arg] 
+  (is (= [:binding 'b :arg]
          (-> (ana (fn [a b])) :methods first :params
              second ((juxt :op :name :local)))))
   ;if
@@ -1121,7 +1020,7 @@
   (is (= :throw (-> (ana (throw (js/Error. "bad"))) :op)))
   (is (= [:exception] (-> (ana (throw (js/Error. "bad"))) :children)))
   ;   :exception
-  (is (= [:js-var 'js 'js/Error] (-> (ana (throw (js/Error. "bad"))) :exception 
+  (is (= [:js-var 'js 'js/Error] (-> (ana (throw (js/Error. "bad"))) :exception
                                   :class
                                   ((juxt :op :ns :name)))))
   ;vector
@@ -1160,10 +1059,10 @@
   (is ((every-pred vector? empty?) (-> (ana (.call 'a)) :args)))
   (is (= [:const 1] (-> (ana (.call 'a 1)) :args first juxt-op-val)))
   ;ns
-  (is (binding [a/*cljs-ns* 'cljs.user]
+  (is (binding [ana/*cljs-ns* 'cljs.user]
         (= :ns (-> (ana (ns fazz.foo)) :op))))
   ;ns*
-  (is (binding [a/*cljs-ns* 'cljs.user]
+  (is (binding [ana/*cljs-ns* 'cljs.user]
         (= :ns* (-> (ana (refer-clojure :exclude '[locking])) :op))))
   ;quote
   (is (= :quote (-> (ana (quote a)) :op)))
@@ -1184,39 +1083,39 @@
   ;munging
   (is (=
        [false 'a]
-       (-> 
+       (->
          (ana (let [a (println 1)
                     b (println 2)]
                 [a b]))
-         :bindings first 
+         :bindings first
          ((juxt #(contains? % :ns) :name)))))
   ;shadowing
   (is (=
        'a
-       (-> 
+       (->
          (ana (let [a (println 1)
                     a (println 2)]
                 [a a]))
-         :bindings second 
+         :bindings second
          :shadow
          :name)))
   (is (=
        'a
-       (-> 
+       (->
          (ana (let [a (println 1)
                     a (println 2)
                     a (println 3)
                     ]
                 [a a a]))
-         :bindings (nth 2) 
+         :bindings (nth 2)
          :shadow
          :shadow
          :name)))
   ;ns
-  (is 
-    (binding [a/*analyze-deps* false]
-    (binding [a/*cljs-ns* 'cljs.user]
-      (ana 
+  (is
+    (binding [ana/*analyze-deps* false]
+    (binding [ana/*cljs-ns* 'cljs.user]
+      (ana
         (ns my.ns.foo
           (:require [clojure.repl]
                     [clojure.string]
@@ -1237,19 +1136,19 @@
         (try
           (ana (quote))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Wrong number of args to quote"))
   (is (.startsWith
         (try
           (ana (quote a b))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Wrong number of args to quote"))
   (is (.startsWith
         (try
           (ana (quote a b c d))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Wrong number of args to quote")))
 
 (deftest var-args-error-test
@@ -1257,93 +1156,25 @@
         (try
           (ana (var))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Wrong number of args to var"))
   (is (.startsWith
         (try
           (ana (var a b))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Wrong number of args to var"))
   (is (.startsWith
         (try
           (ana (var nil))
           (catch Exception e
-            (.getMessage e)))
+            (.getMessage (.getCause e))))
         "Argument to var must be symbol")))
-
-(deftest test-has-extern?-basic
-  (let [externs (externs/externs-map
-                  (closure/load-externs
-                    {:externs ["src/test/externs/test.js"]
-                     :use-only-custom-externs true}))]
-    (is (true? (a/has-extern? '[Foo] externs)))
-    (is (true? (a/has-extern? '[Foo wozMethod] externs)))
-    (is (false? (a/has-extern? '[foo] externs)))
-    (is (false? (a/has-extern? '[Foo gozMethod] externs)))
-    (is (true? (a/has-extern? '[baz] externs)))
-    (is (false? (a/has-extern? '[Baz] externs)))))
-
-(deftest test-has-extern?-defaults
-  (let [externs (externs/externs-map)]
-    (is (true? (a/has-extern? '[console] externs)))
-    (is (true? (a/has-extern? '[console log] externs)))
-    (is (true? (a/has-extern? '[Number isNaN] externs)))))
-
-(def externs-cenv
-  (atom
-    {::a/externs
-     (externs/externs-map
-       (closure/load-externs
-         {:externs ["src/test/externs/test.js"]}))}))
-
-(deftest test-js-tag
-  (let [externs (externs/externs-map
-                  (closure/load-externs
-                    {:externs ["src/test/externs/test.js"]}))]
-    (is (= 'js/Console (a/js-tag '[console] :tag externs)))
-    (is (= 'js/Function (a/js-tag '[console log] :tag externs)))
-    (is (= 'js/Boolean (a/js-tag '[Number isNaN] :ret-tag externs)))
-    (is (= 'js/Foo (a/js-tag '[baz] :ret-tag externs)))))
-
-(deftest test-externs-infer
-  (is (= 'js/Foo
-         (-> (binding [a/*cljs-ns* a/*cljs-ns*]
-               (e/with-compiler-env externs-cenv
-                 (analyze (a/empty-env) 'js/baz)))
-           :info :ret-tag)))
-  (is (= 'js/Foo
-         (-> (binding [a/*cljs-ns* a/*cljs-ns*]
-               (e/with-compiler-env externs-cenv
-                 (analyze (a/empty-env) '(js/baz))))
-           :tag)))
-  (is (= 'js
-         (-> (binding [a/*cljs-ns* a/*cljs-ns*]
-               (e/with-compiler-env externs-cenv
-                 (analyze (a/empty-env) '(js/woz))))
-           :tag)))
-  (is (= 'js
-         (-> (binding [a/*cljs-ns* a/*cljs-ns*]
-               (e/with-compiler-env externs-cenv
-                 (analyze (a/empty-env) '(def foo (js/woz)))))
-           :tag)))
-  (is (= 'js
-          (-> (binding [a/*cljs-ns* a/*cljs-ns*]
-                (e/with-compiler-env externs-cenv
-                  (analyze (a/empty-env) '(def foo js/boz))))
-            :tag)))
-  (is (nil? (-> (binding [a/*cljs-ns* a/*cljs-ns*]
-                  (a/no-warn
-                    (e/with-compiler-env externs-cenv
-                      (analyze (a/empty-env)
-                        '(let [z (.baz ^js/Foo.Bar x)]
-                           z)))))
-              :tag meta :prefix))))
 
 (deftest test-cljs-1871
   (let [ws (atom [])]
     (try
-      (a/with-warning-handlers [(collecting-warning-handler ws)]
+      (ana/with-warning-handlers [(collecting-warning-handler ws)]
         (analyze (ana/empty-env)
           '(do (declare ^{:arglists '([x y])} foo)
                (defn foo [x]))))
@@ -1352,24 +1183,24 @@
 
 (deftest test-cljs-2023
   (let [form (with-meta 'js/goog.DEBUG {:tag 'boolean})]
-    (is (= (-> (ana-api/analyze (a/empty-env) form) :tag) 'boolean))))
+    (is (= (-> (ana-api/analyze (ana/empty-env) form) :tag) 'boolean))))
 
 (deftest test-cljs-1992 ;; declare after def should have no effect
-  (let [test-cenv (e/default-compiler-env)]
-    (e/with-compiler-env test-cenv
-      (a/analyze-form-seq
+  (let [test-cenv (env/default-compiler-env)]
+    (env/with-compiler-env test-cenv
+      (ana/analyze-form-seq
         '[(ns test.cljs-1992)
           (defn test-fn [a b c] :foo)
           (declare test-fn)]
         ))
 
-    (let [def (get-in @test-cenv [::a/namespaces 'test.cljs-1992 :defs 'test-fn])]
+    (let [def (get-in @test-cenv [::ana/namespaces 'test.cljs-1992 :defs 'test-fn])]
       (is (:fn-var def)))))
 
 (deftest test-cljs-2101
-  (let [test-cenv (e/default-compiler-env)]
-    (e/with-compiler-env test-cenv
-      (a/analyze-form-seq
+  (let [test-cenv (env/default-compiler-env)]
+    (env/with-compiler-env test-cenv
+      (ana/analyze-form-seq
         ['(ns test.cljs-2101)
          `(do
             ;; Splice in 32 forms in order to consume first chunk in chunked sequence
@@ -1381,8 +1212,8 @@
 (deftest test-cljs-2139
   (let [ws (atom [])]
     (try
-      (a/with-warning-handlers [(collecting-warning-handler ws)]
-        (analyze (a/empty-env)
+      (ana/with-warning-handlers [(collecting-warning-handler ws)]
+        (analyze (ana/empty-env)
           '(defn foo [] x)))
       (catch Exception _))
     (is (= ["Use of undeclared Var cljs.user/x"] @ws))))
@@ -1391,55 +1222,55 @@
   (binding [ana/*checked-arrays* :warn]
     (let [ws (atom [])]
       (try
-        (a/with-warning-handlers [(collecting-warning-handler ws)]
-          (e/with-compiler-env test-cenv
-            (analyze (a/empty-env)
+        (ana/with-warning-handlers [(collecting-warning-handler ws)]
+          (env/with-compiler-env test-cenv
+            (analyze (ana/empty-env)
               '(aget (js-obj) "a"))))
         (catch Exception _))
       (is (= ["cljs.core/aget, arguments must be an array followed by numeric indices, got [object string] instead (consider goog.object/get for object access)"] @ws)))
     (let [ws (atom [])]
       (try
-        (a/with-warning-handlers [(collecting-warning-handler ws)]
-          (e/with-compiler-env test-cenv
-            (analyze (a/empty-env)
+        (ana/with-warning-handlers [(collecting-warning-handler ws)]
+          (env/with-compiler-env test-cenv
+            (analyze (ana/empty-env)
               '(aget (js-obj) "foo" "bar"))))
         (catch Exception _))
       (is (= ["cljs.core/aget, arguments must be an array followed by numeric indices, got [object string string] instead (consider goog.object/getValueByKeys for object access)"] @ws)))
     (let [ws (atom [])]
       (try
-        (a/with-warning-handlers [(collecting-warning-handler ws)]
-          (e/with-compiler-env test-cenv
-            (analyze (a/empty-env)
+        (ana/with-warning-handlers [(collecting-warning-handler ws)]
+          (env/with-compiler-env test-cenv
+            (analyze (ana/empty-env)
               '(aset (js-obj) "a" 2))))
         (catch Exception _))
       (is (= ["cljs.core/aset, arguments must be an array, followed by numeric indices, followed by a value, got [object string number] instead (consider goog.object/set for object access)"] @ws)))
     (let [ws (atom [])]
       (try
-        (a/with-warning-handlers [(collecting-warning-handler ws)]
-          (e/with-compiler-env test-cenv
-            (analyze (a/empty-env)
+        (ana/with-warning-handlers [(collecting-warning-handler ws)]
+          (env/with-compiler-env test-cenv
+            (analyze (ana/empty-env)
               '(let [^objects arr (into-array [1 2 3])]
                  (aget arr 0)))))
         (catch Exception _))
       (is (empty? @ws)))
     (let [ws (atom [])]
       (try
-        (a/with-warning-handlers [(collecting-warning-handler ws)]
-          (e/with-compiler-env test-cenv
-            (analyze (a/empty-env)
+        (ana/with-warning-handlers [(collecting-warning-handler ws)]
+          (env/with-compiler-env test-cenv
+            (analyze (ana/empty-env)
               '(and true (or (aget (js-obj "foo" 1) "foo") 2)))))
         (catch Exception _))
       (is (= 1 (count @ws))))))
 
 (deftest test-cljs-2037
-  (let [test-env (assoc-in (a/empty-env) [:ns :name] 'cljs.user)]
-    (binding [a/*cljs-ns* a/*cljs-ns*
-              a/*analyze-deps* false]
-      (is (thrown-with-msg? Exception #"Alias str already exists in namespace cljs.user, aliasing clojure.string"
+  (let [test-env (assoc-in (ana/empty-env) [:ns :name] 'cljs.user)]
+    (binding [ana/*cljs-ns* ana/*cljs-ns*
+              ana/*analyze-deps* false]
+      (is (thrown-with-cause-msg? Exception #"Alias str already exists in namespace cljs.user, aliasing clojure.string"
             (analyze test-env '(do
                                    (require '[clojure.string :as str])
                                    (require '[clojure.set :as str])))))
-      (is (thrown-with-msg? Exception #"Alias str already exists in namespace cljs.user, aliasing clojure.string"
+      (is (thrown-with-cause-msg? Exception #"Alias str already exists in namespace cljs.user, aliasing clojure.string"
             (analyze test-env '(do
                                    (require-macros '[clojure.string :as str])
                                    (require-macros '[clojure.set :as str])))))
@@ -1450,19 +1281,19 @@
 
 (deftest test-cljs-2182
   (let [cenv (atom @test-cenv)]
-    (is (thrown-with-msg? Exception
+    (is (thrown-with-cause-msg? Exception
           #"Argument to resolve must be a quoted symbol"
-          (e/with-compiler-env test-cenv
+          (env/with-compiler-env test-cenv
             (analyze test-env '(resolve foo.core)))))))
 
 (deftest test-cljs-2387
-  (a/no-warn
-    (e/with-compiler-env test-cenv
-      (a/analyze-file (io/file "src/test/cljs_build/analyzer_test/no_defs.cljs"))))
-  (is (= {} (get-in @test-cenv [::a/namespaces 'analyzer-test.no-defs :defs]))))
+  (ana/no-warn
+    (env/with-compiler-env test-cenv
+      (ana/analyze-file (io/file "src/test/cljs_build/analyzer_test/no_defs.cljs"))))
+  (is (= {} (get-in @test-cenv [::ana/namespaces 'analyzer-test.no-defs :defs]))))
 
 (deftest test-cljs-2475
-  (is (thrown-with-msg? Exception #"recur argument count mismatch, expected: 2 args, got: 1"
+  (is (thrown-with-cause-msg? Exception #"recur argument count mismatch, expected: 2 args, got: 1"
         (analyze test-env '(loop [x 1 y 2] (recur 3))))))
 
 (deftest test-cljs-2476
@@ -1470,271 +1301,9 @@
                                    (loop [] (try (catch js/Error t (recur))))
                                    (loop [] (try (catch :default t (recur))))
                                    (loop [] (try (finally (recur))))]]
-    (is (thrown-with-msg? Exception
+    (is (thrown-with-cause-msg? Exception
           #"Can't recur here"
           (analyze test-env invalid-try-recur-form)))))
-
-(comment
-  (binding [a/*cljs-ns* a/*cljs-ns*]
-    (a/no-warn
-      (e/with-compiler-env externs-cenv
-        (analyze (a/empty-env)
-          '(let [React (js/require "react")]
-             React)))))
-
-  ;; FIXME: we don't preserve tag information
-  (binding [a/*cljs-ns* a/*cljs-ns*]
-    (a/no-warn
-      (e/with-compiler-env externs-cenv
-        (let [aenv (a/empty-env)
-              _ (analyze aenv '(ns foo.core))
-              aenv' (assoc-in aenv [:ns :name] 'foo.core)
-              _ (a/analyze aenv' '(def x 1))]
-          (dissoc (a/analyze-symbol (assoc-in aenv [:ns :name] 'foo.core) 'x) :env)
-          ;(get-in @externs-cenv [::a/namespaces 'foo.core])
-          ))))
-  )
-
-(def core-inferred
-  ["var setTimeout;" "var process;" "process.hrtime;"
-   "goog.isArrayLike;" "Java.type;" "Object.out;" "Object.out.println;"
-   "Object.error;" "Object.error.println;"])
-
-(defn infer-test-helper
-  [{:keys [forms externs warnings warn js-dependency-index with-core? opts]}]
-  (let [test-cenv (atom
-                    (cond->
-                      (if with-core?
-                        (env/default-compiler-env*
-                          (closure/add-externs-sources (merge {:infer-externs true} opts)))
-                        {::a/externs
-                         (externs/externs-map
-                           (closure/load-externs {:externs (or externs [])}))})
-                      js-dependency-index (assoc :js-dependency-index js-dependency-index)))
-        wrap      (if with-core?
-                    #(comp/with-core-cljs nil %)
-                    #(do (%)))]
-    (a/with-warning-handlers [(collecting-warning-handler (or warnings (atom [])))]
-      (binding [a/*analyze-deps* false
-                a/*cljs-ns* a/*cljs-ns*]
-        (e/with-compiler-env test-cenv
-          (wrap
-            (fn []
-              (binding [a/*analyze-deps* true
-                        a/*cljs-warnings*
-                        (assoc a/*cljs-warnings*
-                          :infer-warning (if (nil? warn) true warn))]
-                (a/analyze-form-seq forms))
-              (with-out-str
-                (comp/emit-externs
-                  (reduce util/map-merge {}
-                    (map (comp :externs second)
-                      (get @test-cenv ::a/namespaces))))))))))))
-
-(deftest test-basic-infer
-  (let [res (infer-test-helper
-              {:forms '[(ns foo.core)
-                        (defn bar [a] (js/parseInt a))
-                        (def c js/React.Component)
-                        (js/console.log "Hello world!")
-                        (fn [& args]
-                          (.apply (.-log js/console) js/console (into-array args)))
-                        (js/console.log js/Number.MAX_VALUE)
-                        (js/console.log js/Symbol.iterator)]})]
-    (is (= (unsplit-lines ["var React;" "React.Component;"]) res))))
-
-(deftest test-method-infer
-  (let [res (infer-test-helper
-              {:forms '[(defn foo [^js/React.Component c]
-                          (.render c))]})]
-    (is (= (unsplit-lines ["var React;" "React.Component;" "React.Component.prototype.render;"])
-           res))))
-
-(deftest test-minimal-infer
-  (let [res (infer-test-helper
-              {:forms '[(js/console.log (.wozMethod (js/baz)))]
-               :externs ["src/test/externs/test.js"]})]
-    (is (string/blank? res))))
-
-(deftest test-type-hint-minimal-infer
-  (let [res (infer-test-helper
-              {:forms ''[(defn afun [^js/Foo x]
-                           (.wozMethod x))]
-               :externs ["src/test/externs/test.js"]})]
-    (is (string/blank? res))))
-
-(deftest test-type-hint-infer-unknown-method-in-chain
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(defn afun [^js/Foo.Bar x]
-                          (let [z (.baz x)]
-                            (.wozz z)))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws})]
-    (is (= (unsplit-lines ["Foo.Boo.prototype.wozz;"]) res))
-    (is (= 1 (count @ws)))
-    (is (string/starts-with?
-          (first @ws)
-          "Cannot resolve property wozz for inferred type js/Foo.Boo"))))
-
-(deftest test-type-hint-infer-unknown-property-in-chain
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(defn afun [^js/Foo.Bar x]
-                          (let [z (.baz x)]
-                            (.-wozz z)))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws})]
-    (is (= (unsplit-lines ["Foo.Boo.prototype.wozz;"]) res))
-    (is (= 1 (count @ws)))
-    (is (string/starts-with?
-          (first @ws)
-          "Cannot resolve property wozz for inferred type js/Foo.Boo"))))
-
-(deftest test-type-hint-infer-unknown-method
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(defn baz [^js/Foo a]
-                           (.gozMethod a))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws})]
-    (is (= (unsplit-lines ["Foo.prototype.gozMethod;"]) res))
-    (is (= 1 (count @ws)))
-    (is (string/starts-with?
-          (first @ws)
-          "Cannot resolve property gozMethod for inferred type js/Foo"))))
-
-(deftest test-infer-unknown-method-from-externs
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(.gozMethod (js/baz))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws})]
-    (is (= (unsplit-lines ["Foo.prototype.gozMethod;"]) res))
-    (is (= 1 (count @ws)))
-    (is (string/starts-with?
-          (first @ws)
-          "Cannot resolve property gozMethod for inferred type js/Foo"))))
-
-(deftest test-infer-js-require
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns foo.core)
-                        (def React (js/require "react"))
-                        (.log js/console (.-Component React))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws})]
-    (is (= (unsplit-lines ["var require;" "Object.Component;"]) res))
-    (is (= 1 (count @ws)))
-    (is (string/starts-with?
-          (first @ws)
-          "Adding extern to Object for property Component"))))
-
-(deftest test-set-warn-on-infer
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns warn-on-infer-test.app)
-                        (set! *warn-on-infer* true)
-                        (defn wrap-baz [x]
-                          (.baz x))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :warn false
-               :with-core? true})]
-    (is (= 1 (count @ws)))
-    (is (string/starts-with? (first @ws) "Cannot infer target type"))))
-
-(deftest test-cljs-1970-infer-with-cljs-literals
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-1970.core)
-                        (set! *warn-on-infer* true)
-                        (defn foo [] (list))
-                        (defn bar [] (vector))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (zero? (count @ws)))))
-
-(deftest test-cljs-1918-infer-with-case-keywords
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-1918.core)
-                        (defn foo [x]
-                          (cljs.core/case x
-                            :foo 1
-                            nil))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (zero? (count @ws)))))
-
-(deftest test-cljs-2385-infer-priority
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-1918.core)
-                        (defn thing [{:as this}]
-                          (.componentDidUpdate ^js/Thing this))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (string/includes? res "Thing.prototype.componentDidUpdate;"))
-    (is (zero? (count @ws)))))
-
-(deftest test-cljs-2392-broken-inferred-externs
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-1918.core
-                          (:require [cljs.nodejs]
-                                    [cljs.nodejscli]))]
-               :warnings ws
-               :with-core? true
-               :opts {:target :nodejs}})]
-    (not (string/includes? res "COMPILED"))
-    (not (string/includes? res "goog"))
-    (is (zero? (count @ws)))))
-
-(deftest test-cljs-2678-global-exports-infer
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:js-dependency-index {"react" {:global-exports '{react React}}}
-               :forms '[(ns foo.core
-                          (:require [react :as react]))
-                        (.log js/console react/Component)]
-               :warnings ws
-               :warn false})]
-    (is (= (unsplit-lines ["Object.Component;"]) res))))
-
-(deftest test-cljs-2767-deftype-defrecord
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-2767.core)
-                        (defrecord Foo [])]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (empty? @ws))
-    (is (not (string/includes? res "cljs.core"))))
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-2767.core)
-                        (deftype Foo [])]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (empty? @ws))
-    (is (not (string/includes? res "cljs.core")))))
-
-(deftest test-cljs-2790-defrecord-fields
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-2790.core)
-                        (defrecord Foo [a b])]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (empty? @ws))
-    (is (not (string/includes? res "cljs.core")))))
 
 (deftest test-locals-mapped-to-sym
   (testing "analyze should be robust to :locals mapping to symbols"
@@ -1742,13 +1311,225 @@
                            ((juxt :op :name)))))))
 
 (deftest test-cljs-2814
-  (is (= "global$module$react" (a/munge-global-export 'react)))
-  (is (= "global$module$_CIRCA_material_ui$core$styles" (a/munge-global-export "@material-ui/core/styles")))
+  (is (= "global$module$react" (ana/munge-global-export 'react)))
+  (is (= "global$module$_CIRCA_material_ui$core$styles" (ana/munge-global-export "@material-ui/core/styles")))
   (is (= "node$module$_CIRCA_material_ui$core$styles" (ana/munge-node-lib "@material-ui/core/styles"))))
 
 (deftest test-cljs-2819
   (let [ws (atom [])]
-    (a/with-warning-handlers [(collecting-warning-handler ws)]
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
       (analyze ns-env
         '(def *foo* 1)))
     (is (string/starts-with? (first @ws) "*foo* not declared dynamic and thus"))))
+
+(deftest test-cljs-3031
+  (let [ws (atom [])]
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
+      (analyze ns-env
+        '(loop [x "a"]
+           (if (identical? "a" x)
+             (recur true)
+             (+ 3 x)))))
+    (is (= 1 (count @ws)))
+    (is (string/starts-with? (first @ws) "cljs.core/+, all arguments must be numbers, got [number #{boolean string}] instead")))
+  (let [ws (atom [])]
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
+      (analyze ns-env
+        '(loop [x "a"]
+           (if (identical? "a" x)
+             (recur 1)
+             (+ 3 x)))))
+    (is (zero? (count @ws)))))
+
+(deftest test-cljs-2868
+  (is (= 'string
+         (env/with-compiler-env test-cenv
+                              (:tag (analyze test-env '(subs "duck" 1 1))))))
+  (is (= 'string
+         (env/with-compiler-env test-cenv
+                              (:tag (analyze test-env '(subs "duck" 1))))))
+
+  (is (= 'string
+         (env/with-compiler-env test-cenv
+                              (:tag (analyze test-env '(str))))))
+  (is (= 'string
+         (env/with-compiler-env test-cenv
+                              (:tag (analyze test-env '(str 1))))))
+  (is (= 'string
+         (env/with-compiler-env test-cenv
+                              (:tag (analyze test-env '(str 1 2))))))
+
+  (is (= 'string
+         (env/with-compiler-env test-cenv
+                              (:tag (analyze test-env '(pr-str 0))))))
+  (is (= 'string
+         (env/with-compiler-env test-cenv
+                              (:tag (analyze test-env '(prn-str 0))))))
+  (is (= 'string
+         (env/with-compiler-env test-cenv
+                              (:tag (analyze test-env '(print-str 0))))))
+  (is (= 'string
+         (env/with-compiler-env test-cenv
+                              (:tag (analyze test-env '(munge-str ""))))))
+  (is (= 'string
+         (env/with-compiler-env test-cenv
+                              (:tag (analyze test-env '(demunge-str "")))))))
+
+(deftest test-cljs-3120
+  (let [cenv (core-env)
+        _ (analyze-forms cenv
+            '[(ns goz.core)
+              (defprotocol IAlpha
+                (foo [this] "foo fn")
+                (bar [this x] "bar fn")
+                (woz [this x y] "baz fn"))])
+        sigs (get-in @cenv [::ana/namespaces 'goz.core :defs 'IAlpha :sigs])]
+    (is (= #{:foo :bar :woz} (set (keys sigs))))
+    (is (every? #(set/subset? #{:name :doc :arglists} (set (keys %))) (vals sigs)))
+    (is #(= '#{foo bar woz} (set (map :name (vals sigs)))))
+    (is #(= '#{([this] [this x] [this x y])} (set (map :arglists (vals sigs)))))
+    (is #(= '#{"foo fn" "bar fn" "baz fn"} (set (map :doc (vals sigs)))))))
+
+(deftest test-cljs-3133
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (keyword? x) x nil))))))
+        '#{cljs.core/Keyword clj-nil}))
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (simple-keyword? x) x nil))))))
+        '#{cljs.core/Keyword clj-nil}))
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (qualified-keyword? x) x nil))))))
+        '#{cljs.core/Keyword clj-nil}))
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (symbol? x) x nil))))))
+        '#{cljs.core/Symbol clj-nil}))
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (simple-symbol? x) x nil))))))
+        '#{cljs.core/Symbol clj-nil}))
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (qualified-symbol? x) x nil))))))
+        '#{cljs.core/Symbol clj-nil}))
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (ident? x) x nil))))))
+        '#{cljs.core/Keyword cljs.core/Symbol clj-nil}))
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (simple-ident? x) x nil))))))
+        '#{cljs.core/Keyword cljs.core/Symbol clj-nil}))
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (qualified-ident? x) x nil))))))
+        '#{cljs.core/Keyword cljs.core/Symbol clj-nil})))
+
+(deftest test-cljs-3140
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (instance? UUID x) x nil))))))
+        '#{cljs.core/UUID clj-nil}))
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (ana/analyze test-env '(let [x ^any []] (if (implements? ICounted x) x nil))))))
+        '#{cljs.core/ICounted clj-nil})))
+
+(deftest test-cljs-3158
+  (is (= (ana/no-warn
+           (env/with-compiler-env test-cenv
+             (:tag (analyze test-env '(loop [a "x" b "y"]
+                                        (if (= a 1)
+                                          a
+                                          (recur b 1)))))))
+        'any)))
+
+(deftest test-cljs-3190
+  (let [ws (atom [])]
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
+      (env/with-compiler-env @test-cenv
+        (analyze (ana/empty-env)
+          '(do
+             (defrecord Foo [a])
+             (:a (->Foo))))))
+    (is (= 1 (count @ws)))
+    (is (string/starts-with? (first @ws) "Wrong number of args (0) passed to cljs.user/->Foo"))))
+
+(deftest test-cljs-3210
+  (let [ws (atom [])]
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
+       (analyze ns-env
+                '(do
+                   (+ "a")
+                   (- "a")
+                   (/ "a")
+                   (* "a"))))
+    (is (= 4 (count @ws)))
+    (let [[w1 w2 w3 w4] @ws]
+      (is (= w1 "cljs.core/+, all arguments must be numbers, got [string] instead"))
+      (is (= w2 "cljs.core/-, all arguments must be numbers, got [string] instead"))
+      (is (= w3 "cljs.core//, all arguments must be numbers, got [number string] instead"))
+      (is (= w4 "cljs.core/*, all arguments must be numbers, got [string] instead")))))
+
+;; this test does pass, but shows a current problem goog file analysis
+;; we only consider the functional API, we don't include information needed
+;; to infer usage of classes
+(deftest test-analyze-goog-ns
+  (let [cenv (env/default-compiler-env)]
+    (env/with-compiler-env cenv
+      (ana/analyze-form-seq
+        '[(ns test.foo
+           (:import [goog.history Html5History]))]))
+    (is (some? (get-in @cenv [::ana/namespaces 'goog.history.Html5History :defs])))))
+
+(deftest test-analyze-goog-ns-ctor
+  (let [cenv (env/default-compiler-env)]
+    (env/with-compiler-env cenv
+      (ana/analyze-form-seq
+        '[(ns test.foo
+            (:import [goog.history Html5History]))]))
+    (is (some? (get-in @cenv [::ana/namespaces 'goog.history.Html5History :defs 'Html5History])))))
+
+(deftest test-cljs-3239
+  (let [cenv (env/default-compiler-env)]
+    (env/with-compiler-env cenv
+      (ana/analyze-form-seq
+        '[(ns test.foo
+            (:import goog))]))
+    (is (= {} (get-in @cenv [::ana/namespaces 'test.foo :imports])))))
+
+(deftest test-cljs-3320
+  (let [ws (atom [])]
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
+      (binding [ana/*cljs-ns* 'cljs.user]
+        (analyze ns-env '(ns cljs3320.core (:require [cljs.js :as js])))))
+    (is (string/includes? (first @ws) "the alias name js is reserved for JavaScript interop"))))
+
+(deftest test-cljs-3371
+  (let [ws (atom [])]
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
+      (env/with-compiler-env @test-cenv
+        (analyze (ana/empty-env)
+                 '(do
+                    (defrecord Foo [a])
+                    (Foo. nil)
+                    (Foo. nil nil nil)))))
+    (is (empty? @ws)))
+  (let [ws (atom [])]
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
+      (env/with-compiler-env @test-cenv
+        (analyze (ana/empty-env)
+                 '(do
+                    (defrecord Foo [a])
+                    (Foo. nil nil)))))
+    (is (= 1 (count @ws)))
+    (is (string/starts-with? (first @ws) "Wrong number of args (2) passed to Foo"))))
+
+(deftest test-cljs-3401
+  (is (not= (ana/gen-constant-id '_PLUS_)
+            (ana/gen-constant-id '+)))
+  (is (not= (ana/gen-constant-id 'foo.bar)
+            (ana/gen-constant-id 'foo$bar))))

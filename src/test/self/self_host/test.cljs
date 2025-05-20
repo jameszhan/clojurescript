@@ -673,7 +673,7 @@
         {:eval node-eval}
         (fn [{:keys [error value]}]
           (is (nil? value))
-          (is (= "if-let requires exactly 2 forms in binding vector at line 1 " (ex-message (ex-cause error))))
+          (is (= "if-let requires exactly 2 forms in binding vector" (ex-message (ex-cause (ex-cause error)))))
           (inc! l)))
       (cljs/eval-str st
         "(if-let [x true] 1 2 3)"
@@ -681,7 +681,7 @@
         {:eval node-eval}
         (fn [{:keys [error value]}]
           (is (nil? value))
-          (is (= "if-let requires 1 or 2 forms after binding vector at line 1 " (ex-message (ex-cause error))))
+          (is (= "if-let requires 1 or 2 forms after binding vector" (ex-message (ex-cause (ex-cause error)))))
           (inc! l)))
       (cljs/eval-str st
         "(if-let '(x true) 1)"
@@ -689,7 +689,7 @@
         {:eval node-eval}
         (fn [{:keys [error value]}]
           (is (nil? value))
-          (is (= "if-let requires a vector for its binding at line 1 " (ex-message (ex-cause error))))
+          (is (= "if-let requires a vector for its binding" (ex-message (ex-cause (ex-cause error)))))
           (inc! l))))))
 
 (deftest test-CLJS-1573
@@ -870,6 +870,19 @@
           (is (nil? error))
           (is (== 1 value))
           (inc! l))))))
+
+#_(deftest test-ns-merge
+  (async done
+    (cljs/eval-str st
+                   "(ns foo.bar (:require [bootstrap-test.core :refer [foo]]))
+                   (ns foo.bar)
+                   (foo 1 1)"
+                   nil
+                   {:eval node-eval
+                    :load node-load}
+                   (fn [{:keys [value error]}]
+                     (is (nil? error))
+                     (done)))))
 
 (deftest test-cljs-1651
   (let [st (cljs/empty-state)]
@@ -1483,6 +1496,126 @@
                     sms (:source-maps @st)]
                 (is (some cljs-timestamp? (keys sms)))
                 (inc! l)))))))))
+
+(deftest test-cljs-2991
+  (async done
+    (let [l (latch 1 done)]
+      (let [st (cljs/empty-state)]
+        (cljs/eval-str st
+          "(js-obj)"
+          nil
+          {:ns         'cljs.user
+           :target     :nodejs
+           :eval       node-eval}
+          (fn [{:keys [value]}]
+            (is (object? value))
+            (is (empty? (js-keys value)))
+            (inc! l)))))))
+
+(deftest test-cljs-3129
+  (async done
+    (let [l (latch 1 done)]
+      (let [st (cljs/empty-state)]
+        (cljs/eval-str st
+          "(ns cljs.user (:require-macros foo-3129-1.core))"
+          nil
+          {:eval node-eval
+           :load (fn [_ cb] (cb {:lang :clj :source "(ns foo-3129-1.core) (defmacro add [a b] `(+ ~a ~b))"}))}
+          (fn [{:keys [value error]}]
+            (is (nil? error))
+            (cljs/eval-str st
+              "(foo-3129-1.core/add 1)"
+              nil
+              {:eval    node-eval
+               :context :expr}
+              (fn [{:keys [error value]}]
+                (is (nil? value))
+                (is (= "Wrong number of args (1) passed to foo-3129-1.core$macros/add"
+                      (ex-message (ex-cause (ex-cause error)))))
+                (inc! l))))))
+      (let [st (cljs/empty-state)]
+        (cljs/eval-str st
+          "(ns cljs.user (:require-macros foo-3129-2.core))"
+          nil
+          {:eval node-eval
+           :load (fn [_ cb] (cb {:lang :clj :source "(ns foo-3129-2.core) (defmacro add [a b] `(+ ~a ~b))"}))}
+          (fn [{:keys [value error]}]
+            (is (nil? error))
+            (cljs/eval-str st
+              "(foo-3129-2.core/add 1 2 3)"
+              nil
+              {:eval    node-eval
+               :context :expr}
+              (fn [{:keys [error value]}]
+                (is (nil? value))
+                (is (= "Wrong number of args (3) passed to foo-3129-2.core$macros/add"
+                      (ex-message (ex-cause (ex-cause error)))))
+                (inc! l))))))
+      (let [st (cljs/empty-state)]
+        (cljs/eval-str st
+          "(ns cljs.user (:require-macros foo-3129-3.core))"
+          nil
+          {:eval node-eval
+           :load (fn [_ cb] (cb {:lang :clj :source "(ns foo-3129-3.core) (defmacro when [test & body])"}))}
+          (fn [{:keys [value error]}]
+            (is (nil? error))
+            (cljs/eval-str st
+              "(foo-3129-3.core/when)"
+              nil
+              {:eval    node-eval
+               :context :expr}
+              (fn [{:keys [error value]}]
+                (is (nil? value))
+                (is (= "Wrong number of args (0) passed to foo-3129-3.core$macros/when"
+                      (ex-message (ex-cause (ex-cause error)))))
+                (inc! l)))))))))
+
+(deftest test-cljs-3287
+  (async done
+    (let [st (cljs/empty-state)
+          l (latch 2 done)]
+      (cljs/eval-str st
+                     "(throw (js/Error. \"eval error\"))"
+                     nil
+                     {:ns         'cljs.user
+                      :target     :nodejs
+                      :eval       node-eval}
+                     (fn [{:keys [error]}]
+                       (is (some? error))
+                       (inc! l)))
+      (cljs/eval st
+                 '(throw (js/Error. "eval error"))
+                 {:ns     'cljs.user
+                  :target :nodejs
+                  :eval   node-eval}
+                 (fn [{:keys [error]}]
+                   (is (some? error))
+                   (inc! l))))))
+
+(deftest test-cljs-3288
+  (async done
+    (let [st (cljs/empty-state)
+          l (latch 2 done)
+          load (fn [_ cb] (js/setTimeout #(cb {:lang :js :source ""}) 0))]
+      (cljs/eval st
+                 '(require 'bootstrap-test.js-source)
+                 {:ns     'cljs.user
+                  :target :nodejs
+                  :eval   node-eval
+                  :load   load}
+                 (fn [{:as res :keys [error]}]
+                   (is (nil? error))
+                   (inc! l)))
+      (cljs/eval-str st
+                     "(require 'bootstrap-test.js-source)"
+                     nil
+                     {:ns     'cljs.user
+                      :target :nodejs
+                      :eval   node-eval
+                      :load   load}
+                     (fn [{:as res :keys [error]}]
+                       (is (nil? error))
+                       (inc! l))))))
 
 (defn -main [& args]
   (run-tests))

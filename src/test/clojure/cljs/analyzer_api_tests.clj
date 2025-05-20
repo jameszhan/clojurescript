@@ -40,3 +40,21 @@
       (ana-api/analyze test-cenv test-env warning-form nil
                        {:warning-handlers [(warning-handler counter)]}))
     (is (= 1 @counter))))
+
+(deftest get-options-test
+  (let [state (atom {:options {:a 1}})]
+    (is (= {:a 1} (ana-api/get-options state)))
+    (ana-api/with-state state
+      (is (= {:a 1} (ana-api/get-options))))))
+
+(deftest get-js-index-test
+  (let [state (atom {:js-dependency-index {:a 1}})]
+    (is (= {:a 1} (ana-api/get-js-index state)))
+    (ana-api/with-state state
+      (is (= {:a 1} (ana-api/get-js-index))))))
+
+(deftest throw-test
+  (let [state (atom {})]
+    (is (thrown? Exception (ana-api/the-ns state 'non.existing)))
+    (is (thrown? Exception (ana-api/ns-interns state 'non.existing)))
+    (is (thrown? Exception (ana-api/ns-publics state 'non.existing)))))

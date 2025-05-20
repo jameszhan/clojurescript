@@ -44,7 +44,8 @@ For --main and --repl:
 The init options may be repeated and mixed freely, but must appear before
 any main option.
 
-In the case of --compile you may supply --repl or --serve options afterwards.
+In the case of --compile you may supply --repl or --serve (if applicable)
+options afterwards.
 
 Paths may be absolute or relative in the filesystem or relative to
 classpath. Classpath-relative paths have prefix of @ or @/")
@@ -60,9 +61,11 @@ classpath. Classpath-relative paths have prefix of @ or @/")
          (let [w (.substring ws s e)
                word-len (.length w)
                line-len (+ line-len word-len)]
-           (if (> line-len max-len)
-             (recur e (.next b) word-len w (conj ret line))
-             (recur e (.next b) line-len (str line w) ret)))
+           (if (= w "--") ; long-form options are single tokens (i.e. --repl)
+             (recur s (.next b) (- line-len 2) line ret)
+             (if (> line-len max-len)
+               (recur e (.next b) word-len w (conj ret line))
+               (recur e (.next b) line-len (str line w) ret))))
          (conj ret (str line (.substring ws s (.length ws)))))))))
 
 (defn- opt->str [cs {:keys [arg doc]}]
@@ -182,6 +185,10 @@ classpath. Classpath-relative paths have prefix of @ or @/")
   [cfg path]
   (assoc-in cfg [:options :output-to] path))
 
+(defn- deps-cmd-opt
+  [cfg deps-cmd]
+  (assoc-in cfg [:options :deps-cmd] deps-cmd))
+
 (defn- target-opt
   [cfg target]
   (let [target (if (= "node" target) "nodejs" target)]
@@ -277,12 +284,6 @@ classpath. Classpath-relative paths have prefix of @ or @/")
       ((get-dispatch commands :init opt) ret arg))
     {} inits))
 
-(defn dissoc-entry-point-opts
-  "Dissoc the entry point options from the input. Necessary when the user
-is trying load some arbitrary ns."
-  [opts]
-  (dissoc opts :main :output-to))
-
 (defn temp-out-dir []
   (let [f (File/createTempFile "out" (Long/toString (System/nanoTime)))]
     (.delete f)
@@ -294,9 +295,19 @@ is trying load some arbitrary ns."
     (when (string/starts-with? repl-ns "cljs.repl.")
       (subs repl-ns (count "cljs.repl.")))))
 
-(defn- fast-initial-prompt? [repl-env inits]
-  (and (empty? inits)
-       (contains? #{"node" "nashorn" "graaljs" "rhino"} (repl-name repl-env))))
+(defn- fast-initial-prompt? [repl-env options inits]
+  (boolean
+    (and (empty? inits)
+         (not (:verbose options))
+         (not (:repl-verbose options))
+         (contains? #{"node"} (repl-name repl-env)))))
+
+(defn target->repl-env [target default]
+  (if (= :nodejs target)
+    (do
+      (require 'cljs.repl.node)
+      (resolve 'cljs.repl.node/repl-env))
+    default))
 
 (defn- repl-opt
   "Start a repl with args and inits. Print greeting if no eval options were
@@ -307,13 +318,21 @@ present"
                  (assoc :output-dir (temp-out-dir) :temp-output-dir? true)
                  (not (contains? options :aot-cache))
                  (assoc :aot-cache true))
-        reopts (merge repl-env-options (select-keys opts [:output-to :output-dir]))
+        reopts (merge repl-env-options (select-keys opts [:main :output-dir]))
         _      (when (or ana/*verbose* (:verbose opts))
                  (util/debug-prn "REPL env options:" (pr-str reopts)))
-        renv   (apply repl-env (mapcat identity reopts))]
+        renv   (apply (target->repl-env (:target options) repl-env) (mapcat identity reopts))]
     (repl/repl* renv
-      (assoc (dissoc-entry-point-opts opts)
-        ::repl/fast-initial-prompt? (fast-initial-prompt? repl-env inits)
+      (assoc opts
+        ::repl/fast-initial-prompt?
+        (or (fast-initial-prompt? repl-env options inits)
+            (::repl/fast-initial-prompt? (repl/repl-options renv)))
+
+        :quit-prompt
+        (if (empty? inits)
+          repl/repl-title
+          (constantly nil))
+
         :inits
         (into
           [{:type :init-forms
@@ -322,6 +341,8 @@ present"
           inits)))))
 
 (defn default-main
+  "Default handler for the --main flag. Will start REPL, invoke -main with the
+  supplied arguments."
   [repl-env {:keys [main script args repl-env-options options inits] :as cfg}]
   (let [opts   (cond-> options
                  (not (:output-dir options))
@@ -332,12 +353,11 @@ present"
                  (select-keys opts [:output-to :output-dir]))
         _      (when (or ana/*verbose* (:verbose opts))
                  (util/debug-prn "REPL env options:" (pr-str reopts)))
-        renv   (apply repl-env (mapcat identity reopts))
+        renv   (apply (target->repl-env (:target options) repl-env) (mapcat identity reopts))
         coptsf (when-let [od (:output-dir opts)]
                  (io/file od "cljsc_opts.edn"))
         copts  (when (and coptsf (.exists coptsf))
-                 (-> (edn/read-string (slurp coptsf))
-                   (dissoc-entry-point-opts)))
+                 (edn/read-string (slurp coptsf)))
         opts   (merge copts
                  (build/add-implicit-options
                    (merge (repl/repl-options renv) opts)))]
@@ -352,6 +372,9 @@ present"
         (fn []
           (try
             (repl/setup renv repl/*repl-opts*)
+            ;; Load cljs.repl runtime (so ex-str, ex-triage, etc. are available)
+            (repl/evaluate-form renv (ana-api/empty-env) "<cljs repl>"
+              `(~'require ~''cljs.repl))
             ;; REPLs don't normally load cljs_deps.js
             (when (and coptsf (.exists coptsf))
               (let [depsf (io/file (:output-dir opts) "cljs_deps.js")]
@@ -411,7 +434,9 @@ present"
 
 (defn- main-opt
   "Call the -main function from a namespace with string arguments from
-  the command line."
+  the command line. Can be customized with ::cljs.cli/main fn entry in
+  the map returned by cljs.repl/IReplEnvOptions. For default behavior
+  see default-main."
   [repl-env [_ ns & args] cfg]
   ((::main (repl/repl-options (repl-env)) default-main)
     repl-env (merge cfg {:main ns :args args})))
@@ -427,6 +452,10 @@ present"
   (println (help-str repl-env)))
 
 (defn- script-opt
+  "If no main option was given (compile, repl, main), handles running in
+  'script' mode. Can be customized with ::cljs.cli/main fn entry in
+  the map returned by cljs.repl/IReplEnvOptions. For default behavior see
+  default-main."
   [repl-env [path & args] cfg]
   ((::main (repl/repl-options (repl-env)) default-main)
     repl-env (merge cfg {:script path :args args})))
@@ -453,20 +482,28 @@ present"
                9000)
        :output-dir (:output-dir options "out")})))
 
+(defn- install-deps-opt
+  [_ _ {:keys [options] :as cfg}]
+  (closure/maybe-install-node-deps! options))
+
+(defn get-main-ns [{:keys [ns options] :as cfg}]
+  (if (and ns (not (#{"-r" "--repl" "-s" "--serve"} ns)))
+    (symbol ns)
+    (:main options)))
+
 (defn default-compile
-  [repl-env {:keys [ns args options] :as cfg}]
+  [repl-env {:keys [ns args options post-compile-fn] :as cfg}]
   (let [rfs      #{"-r" "--repl"}
         sfs      #{"-s" "--serve"}
-        env-opts (repl/repl-options (repl-env))
+        env-opts (repl/repl-options ((target->repl-env (:target options) repl-env)))
         repl?    (boolean (or (rfs ns) (rfs (first args))))
         serve?   (boolean (or (sfs ns) (sfs (first args))))
-        main-ns  (if (and ns (not ((into rfs sfs) ns)))
-                   (symbol ns)
-                   (:main options))
+        main-ns  (get-main-ns cfg)
         opts     (as->
                    (merge
                      (select-keys env-opts
-                       (cond-> [:target] repl? (conj :browser-repl)))
+                       (cond-> closure/known-opts
+                         repl? (conj :browser-repl)))
                      options
                      (when main-ns
                        {:main main-ns})) opts
@@ -474,12 +511,16 @@ present"
                      (not (:output-to opts))
                      (assoc :output-to
                        (.getPath (io/file (:output-dir opts "out") "main.js")))
+
                      (= :advanced (:optimizations opts))
                      (dissoc :browser-repl)
+
                      (not (:output-dir opts))
                      (assoc :output-dir "out")
+
                      (not (contains? opts :aot-cache))
                      (assoc :aot-cache true)
+
                      (sequential? (:watch opts))
                      (update :watch cljs.closure/compilable-input-paths)))
         convey   (into [:output-dir] repl/known-repl-opts)
@@ -495,36 +536,67 @@ present"
           (build/build source opts cenv)
           (build/watch path opts cenv))
         (build/build source opts cenv))
+      (when (fn? post-compile-fn)
+        (post-compile-fn))
       (when repl?
-        (repl-opt repl-env args cfg))
+        (repl-opt repl-env args
+          (cond-> (assoc-in cfg [:options :compiler-env] cenv)
+            main-ns (update :options merge {:main main-ns}))))
       (when serve?
         (serve-opt repl-env args cfg)))))
 
 (defn- compile-opt
+  "Handle the compile flag. Custom compilation is possible by providing
+  :cljs.cli/compile fn in the map returned by cljs.repl/IReplEnvOptions.
+  For default behavior see default-compile."
   [repl-env [_ ns & args] cfg]
   ((::compile (repl/-repl-options (repl-env)) default-compile)
     repl-env (merge cfg {:args args :ns ns})))
 
-(defn get-options [commands k]
-  (if (= :all k)
+(defn get-options
+  "Given a commands map and a phase (:init or :main), return all flags
+  which can be handled as a set. If phase is :all will return the entire
+  flag set (:init + :main)."
+  [commands phase]
+  (if (= :all phase)
     (into (get-options commands :main) (get-options commands :init))
-    (-> (get commands (keyword (str (name k) "-dispatch")))
+    (-> (get commands (keyword (str (name phase) "-dispatch")))
       keys set)))
 
-(defn dispatch? [commands k opt]
-  (contains? (get-options commands k) opt))
+(defn get-flags-set
+  "See get-options, this just provides a better name."
+  [commands phase]
+  (get-options commands phase))
+
+(defn bool-init-options
+  [commands]
+  (reduce
+    (fn [ret [flags config]]
+      (cond-> ret
+        (= "bool" (:arg config))
+        (into flags)))
+    #{} (:init commands)))
+
+(defn dispatch?
+  "Given a commands map, a phase (:init or :main) and a command line flag,
+  return true if the flag has a handler."
+  [commands phase opt]
+  (contains? (get-flags-set commands phase) opt))
 
 (defn add-commands
+  "Given commands map (see below), create a commands map with :init-dispatch
+  and :main-dispatch keys where short and long arguments are mapped individually
+  to their processing fn."
   ([commands]
     (add-commands {:main-dispatch nil :init-dispatch nil} commands))
   ([commands {:keys [groups main init]}]
-   (letfn [(merge-dispatch [st k options]
-             (update-in st [k]
+   (letfn [(merge-dispatch [commands dispatch-key options]
+             (update-in commands [dispatch-key]
                (fn [m]
                  (reduce
-                   (fn [ret [cs csm]]
+                   (fn [ret [flag-names flag-config]]
                      (merge ret
-                       (zipmap cs (repeat (:fn csm)))))
+                       (zipmap flag-names (repeat (:fn flag-config)))))
                    m options))))]
      (-> commands
        (update-in [:groups] merge groups)
@@ -533,15 +605,22 @@ present"
        (merge-dispatch :init-dispatch init)
        (merge-dispatch :main-dispatch main)))))
 
-(def default-commands
+(def ^{:doc "Default commands for ClojureScript REPLs. :groups are to support
+printing organized output for --help. a :main option must come at the end, they
+specify things like running a -main fn, compile, repl, or web serving. Sometimes
+:main options can be used together (i.e. --compile --repl), but this is not
+generic - the combinations must be explicitly supported"}
+  default-commands
   (add-commands
     {:groups {::main&compile {:desc "init options"
                               :pseudos
                               {["-re" "--repl-env"]
                                {:arg "env"
                                 :doc (str "The REPL environment to use. Built-in "
-                                          "supported values: nashorn, graaljs, node, browser, "
-                                          "rhino. Defaults to browser")}}}
+                                          "supported values: node, browser. "
+                                          "Defaults to browser. If given a "
+                                          "non-single-segment namespace, will "
+                                          "use the repl-env fn found there.")}}}
               ::main {:desc "init options only for --main and --repl"}
               ::compile {:desc "init options only for --compile"}}
      :init
@@ -568,6 +647,9 @@ present"
       ["-o" "--output-to"]     {:group ::compile :fn output-to-opt
                                 :arg "file"
                                 :doc "Set the output compiled file"}
+      ["--deps-cmd"]           {:group ::compile :fn deps-cmd-opt
+                                :arg "string"
+                                :doc "Set the node dependency manager. Only npm or yarn supported"}
       ["-O" "--optimizations"] {:group ::compile :fn optimize-opt
                                 :arg "level"
                                 :doc
@@ -578,8 +660,8 @@ present"
                                 :arg "name"
                                 :doc
                                 (str "The JavaScript target. Configures environment bootstrap and "
-                                     "defaults to browser. Supported values: node or nodejs, nashorn, "
-                                     "graaljs, webworker, none") }
+                                     "defaults to browser. Supported values: node or nodejs, "
+                                     "webworker, bundle, none") }
       ["-ro" "--repl-opts"]    {:group ::main&compile :fn repl-env-opts-opt
                                 :arg "edn"
                                 :doc (str "Options to configure the repl-env, can be an EDN string or "
@@ -591,7 +673,9 @@ present"
                                           "system-dependent path-separated list of EDN files / classpath resources. Options "
                                           "will be merged left to right.")}}
      :main
-     {["-r" "--repl"]          {:fn repl-opt
+     {["--install-deps"]       {:fn install-deps-opt
+                                :doc "Install all :npm-deps found upstream and in supplied compiler options"}
+      ["-r" "--repl"]          {:fn repl-opt
                                 :doc "Run a repl"}
       ["-m" "--main"]          {:fn main-opt
                                 :arg "ns"
@@ -601,7 +685,7 @@ present"
                                 :doc (str "Run a compile. If optional namespace specified, use as "
                                           "the main entry point. If --repl follows, "
                                           "will launch a REPL after the compile completes. "
-                                          "If --server follows, will start a web server that serves "
+                                          "If --serve follows, will start a web server that serves "
                                           "the current directory after the compile completes.")}
       ["-s" "--serve"]         {:fn serve-opt
                                 :arg "host:port"
@@ -610,25 +694,39 @@ present"
       ["-h" "--help" "-?"]     {:fn help-opt
                                 :doc "Print this help message and exit"}}}))
 
-(defn normalize [commands args]
-  (if (not (contains? (get-options commands :main) (first args)))
-    (let [pred (complement #{"-v" "--verbose"})
-          [pre post] ((juxt #(take-while pred %)
-                            #(drop-while pred %))
-                       args)]
-      (cond
-        (= pre args) pre
+(defn normalize
+  "Given a commands map (flag + value -> option processor fn) and the sequence of
+  command line arguments passed to the process, normalize it. Boolean flags don't
+  need to specify anything, insert the implied trues and return the normalized
+  command line arguments."
+  [commands args]
+  (letfn [(normalize* [args*]
+            (if (not (contains? (get-flags-set commands :main) (first args*)))
+              (let [pred (complement (bool-init-options commands))
+                    [pre post] ((juxt #(take-while pred %)
+                                  #(drop-while pred %))
+                                args*)]
+                (cond
+                  (= pre args*) pre
 
-        (not (#{"true" "false"} (fnext post)))
-        (concat pre [(first post) "true"]
-          (normalize commands (next post)))
+                  (not (#{"true" "false"} (fnext post)))
+                  (concat pre [(first post) "true"]
+                    (normalize commands (next post)))
 
-        :else
-        (concat pre [(first post) (fnext post)]
-          (normalize commands (nnext post)))))
-    args))
+                  :else
+                  (concat pre [(first post) (fnext post)]
+                    (normalize commands (nnext post)))))
+              args*))]
+    (loop [args args args' (normalize* args)]
+      (if (= args args')
+        args'
+        (recur args' (normalize* args'))))))
 
-(defn merged-commands [repl-env]
+(defn merged-commands
+  "Given a repl environment combine the default commands with the custom
+  REPL commands. Commands are a mapping from a command line argument
+  (flag + value) to a function to handle that particular flag + value."
+  [repl-env]
   (add-commands default-commands
     (::commands (repl/repl-options (repl-env)))))
 
