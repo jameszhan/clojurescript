@@ -142,7 +142,7 @@
            ss (map rf (string/split ss #"\."))
            ss (string/join "." ss)
            ms #?(:clj (clojure.lang.Compiler/munge ss)
-                 :cljs (#'cljs.core/munge-str ss))]
+                 :cljs (munge-str ss))]
        (if (symbol? s)
          (symbol ms)
          ms)))))
@@ -522,6 +522,27 @@
     (and (every? #(= (:op %) :const) keys)
          (= (count (into #{} keys)) (count keys)))))
 
+(defn obj-map-key [x]
+  (if (keyword? x)
+    (str \" "\\uFDD0" \'
+      (if (namespace x)
+        (str (namespace x) "/") "")
+      (name x)
+      \")
+    (str \" x \")))
+
+(defn emit-obj-map [str-keys vals comma-sep distinct-keys?]
+  (if (zero? (count str-keys))
+    (emits "cljs.core.ObjMap.EMPTY")
+    (emits "cljs.core.ObjMap.fromObject([" (comma-sep str-keys) "], {"
+      (comma-sep (map (fn [k v] (str k ":" (emit-str v))) str-keys vals))
+      "})")))
+
+(defn emit-lite-map [keys vals comma-sep distinct-keys?]
+  (if (zero? (count keys))
+    (emits "cljs.core.HashMapLite.EMPTY")
+    (emits "cljs.core.HashMapLite.fromArrays([" (comma-sep keys) "], [" (comma-sep vals) "])")))
+
 (defn emit-map [keys vals comma-sep distinct-keys?]
   (cond
     (zero? (count keys))
@@ -544,9 +565,14 @@
       "])")))
 
 (defmethod emit* :map
-  [{:keys [env keys vals]}]
+  [{:keys [env form keys vals]}]
   (emit-wrap env
-    (emit-map keys vals comma-sep distinct-keys?)))
+    (if (ana/lite-mode?)
+      (let [form-keys (clojure.core/keys form)]
+        (if (every? #(or (string? %) (keyword? %)) form-keys)
+          (emit-obj-map (map obj-map-key form-keys) vals comma-sep distinct-keys?)
+          (emit-lite-map keys vals comma-sep distinct-keys?)))
+      (emit-map keys vals comma-sep distinct-keys?))))
 
 (defn emit-list [items comma-sep]
   (if (empty? items)
@@ -562,10 +588,17 @@
           ", 5, cljs.core.PersistentVector.EMPTY_NODE, ["  (comma-sep items) "], null)")
         (emits "cljs.core.PersistentVector.fromArray([" (comma-sep items) "], true)")))))
 
+(defn emit-lite-vector [items comma-sep]
+  (if (empty? items)
+    (emits "cljs.core.VectorLite.EMPTY")
+    (emits "new cljs.core.VectorLite(null, [" (comma-sep items) "], null)")))
+
 (defmethod emit* :vector
   [{:keys [items env]}]
   (emit-wrap env
-    (emit-vector items comma-sep)))
+    (if (ana/lite-mode?)
+      (emit-lite-vector items comma-sep)
+      (emit-vector items comma-sep))))
 
 (defn distinct-constants? [items]
   (let [items (map ana/unwrap-quote items)]
@@ -583,10 +616,17 @@
 
     :else (emits "cljs.core.PersistentHashSet.createAsIfByAssoc([" (comma-sep items) "])")))
 
+(defn emit-lite-set [items comma-sep distinct-constants?]
+  (if (empty? items)
+    (emits "cljs.core.SetLite.EMPTY")
+    (emits "cljs.core.set_lite([" (comma-sep items) "])")))
+
 (defmethod emit* :set
   [{:keys [items env]}]
   (emit-wrap env
-    (emit-set items comma-sep distinct-constants?)))
+    (if (ana/lite-mode?)
+      (emit-lite-set items comma-sep distinct-constants?)
+      (emit-set items comma-sep distinct-constants?))))
 
 (defn emit-js-object [items emit-js-object-val]
   (emits "({")
@@ -641,7 +681,8 @@
 
 (defn safe-test? [env e]
   (let [tag (ana/infer-tag env e)]
-    (or (#{'boolean 'seq} tag) (truthy-constant? e))))
+    (or ('#{boolean seq} (ana/js-prim-ctor->tag tag tag))
+        (truthy-constant? e))))
 
 (defmethod emit* :if
   [{:keys [test then else env unchecked]}]
@@ -1260,6 +1301,14 @@
                     (comma-sep args)
                     "))")))
 
+(defmethod emit* :qualified-method
+  [{ctor :class :keys [args env kind name]}]
+  (if (= :new kind)
+    (emit-wrap env
+      (emits "(function (...args) { return Reflect.construct(" ctor ", args) })"))
+    (emit-wrap env
+      (emits "(function (x, ...args) { return Reflect.apply(" ctor ".prototype." name ", x, args) })"))))
+
 (defmethod emit* :set!
   [{:keys [target val env]}]
   (emit-wrap env (emits "(" target " = " val ")")))
@@ -1271,19 +1320,24 @@
       (apply str
         (map #(str "['" % "']") xs)))))
 
-(defn emit-global-export [ns-name global-exports lib]
-  (let [[lib' sublib] (ana/lib&sublib lib)]
+(defn emit-global-export [ns-name global-exports lib opts]
+  (let [[lib' sublib] (ana/lib&sublib lib)
+        ref (str "goog.global"
+              ;; Convert object dot access to bracket access
+              (->> (string/split (name (or (get global-exports (symbol lib'))
+                                           (get global-exports (name lib'))))
+                     #"\.")
+                (map (fn [prop] (str "[\"" prop "\"]")))
+                (apply str)))]
+    (when (and (ana/external-dep? lib')
+               (= :none (:optimizations opts)))
+      (emitln
+        "if(!" ref ") throw new Error(\"External library, " lib' ", never provided\");"))
     (emitln
       (munge ns-name) "."
       (ana/munge-global-export lib)
-      " = goog.global"
-      ;; Convert object dot access to bracket access
-      (->> (string/split (name (or (get global-exports (symbol lib'))
-                                   (get global-exports (name lib'))))
-             #"\.")
-        (map (fn [prop]
-               (str "[\"" prop "\"]")))
-        (apply str))
+      " = "
+      ref
       (sublib-select sublib)
       ";")))
 
@@ -1326,7 +1380,10 @@
                          escape-string
                          wrap-in-double-quotes)
                        ");"))
-                   (emitln "goog.require('" (munge lib) "');"))))]
+                   (if-not (ana/external-dep? lib)
+                     (emitln "goog.require('" (munge lib) "');")
+                     ;; TODO: validate the lib exists
+                     ))))]
             :cljs
             [(and (ana/foreign-dep? lib)
                   (not (keyword-identical? optimizations :none)))
@@ -1365,7 +1422,7 @@
     ;; Global Exports
     (doseq [lib global-exports-libs]
       (let [{:keys [global-exports]} (get js-dependency-index (name (-> lib ana/lib&sublib first)))]
-        (emit-global-export ns-name global-exports lib)))
+        (emit-global-export ns-name global-exports lib options)))
     (when (-> libs meta :reload-all)
       (emitln "if(!COMPILED) " loaded-libs " = cljs.core.into(" loaded-libs-temp ", " loaded-libs ");"))))
 

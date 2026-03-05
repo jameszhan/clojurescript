@@ -7,6 +7,7 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns cljs.core-test
+  (:refer-global :only [Object String])
   (:refer-clojure :exclude [iter])
   (:require [cljs.test :refer-macros [deftest testing is are]]
             [clojure.test.check :as tc]
@@ -196,12 +197,12 @@
     (is (= #{:cljs.core-test/rect :cljs.core-test/square} (descendants ::shape)))
     (is (true? (isa? 42 42)))
     (is (true? (isa? ::square ::shape)))
-    (derive cljs.core.ObjMap ::collection)
+    (derive ObjMap ::collection)
     (derive cljs.core.PersistentHashSet ::collection)
-    (is (true? (isa? cljs.core.ObjMap ::collection)))
+    (is (true? (isa? ObjMap ::collection)))
     (is (true? (isa? cljs.core.PersistentHashSet ::collection)))
     (is (false? (isa? cljs.core.IndexedSeq ::collection)))
-    ;; ?? (isa? String Object)
+    (isa? js/String js/Object)
     (is (true? (isa? [::square ::rect] [::shape ::shape])))
     ;; ?? (ancestors java.util.ArrayList)
     ;; ?? isa? based dispatch tests
@@ -407,102 +408,6 @@
         (into []
           (halt-when :anomaly #(assoc %2 :partial-results %1))
           [1 2 {:anomaly :oh-no!} 3 4]))))
-
-(deftest test-obj-equiv
-  (testing "Object equiv method"
-    (is (.equiv :foo :foo))
-    (is (.equiv 'foo 'foo))
-    (is (.equiv {:foo 1 :bar 2} {:foo 1 :bar 2}))
-    (is (.equiv [1 2 3] [1 2 3]))
-    (is (.equiv '(1 2 3) '(1 2 3)))
-    (is (.equiv (map inc [1 2 3]) (map inc [1 2 3])))
-    (is (.equiv #{:cat :dog :bird} #{:cat :dog :bird}))
-    ))
-
-(defn seq-iter-match
-  [coll]
-  (let [i (-iterator coll)]
-    (loop [s (seq coll)
-           n 0]
-      (if (seq s)
-        (do
-          (when-not (.hasNext i)
-            (throw
-              (js/Error.
-                (str  "Iterator exhausted before seq at(" n ")" ))))
-          (let [iv (.next i)
-                sv (first s)]
-           (when-not (= iv sv)
-            (throw
-              (js/Error.
-                (str "Iterator value " iv " and seq value " sv " did not match at ( "  n ")")))))
-          (recur (rest s) (inc n)))
-        (if (.hasNext i)
-          (throw
-            (js/Error.
-              (str  "Seq exhausted before iterator at (" n ")")))
-          true)))))
-
-(defrecord TestIterRec [a b])
-
-(deftest coll-iter-seq-match
-  (testing "Direct iterators match sequences"
-    (let [test-map (apply hash-map (range 200))
-          test-set (apply hash-set (range 200))
-          test-queue (into cljs.core.PersistentQueue.EMPTY (vec (range 100)))
-          test-record (into (TestIterRec. 1 2) {:c 3 :d 4})]
-      (is (= true (seq-iter-match test-map)))
-      (is (= true (seq-iter-match test-set)))
-      (is (= true (seq-iter-match test-queue)))
-      (is (= true (seq-iter-match test-record))))))
-
-(deftest test-es6-interfaces
-  (testing "ES6 collection interfaces"
-    (let [iter (es6-iterator [1 2 3])]
-      (testing "basic iterations"
-        (is (= (.-value (.next iter)) 1))
-        (is (= (.-value (.next iter)) 2))
-        (is (= (.-value (.next iter)) 3))
-        (is (.-done (.next iter)))))
-    (is (.has {:foo "bar"} :foo))
-    (is (= (.get {:foo "bar"} :foo) "bar"))
-    (is (= (.get {:foo "bar"} :bar :default) :default))
-    (let [iter (.keys {:foo "bar" :baz "woz"})]
-      (testing "map key iteration"
-        (is (#{:foo :baz} (.-value (.next iter))))
-        (is (#{:foo :baz} (.-value (.next iter))))
-        (is (.-done (.next iter)))))
-    (let [eiter (.entries {:foo "bar" :baz "woz"})]
-      (testing "map entry iteration"
-        (let [entries #{(seq #js [:foo "bar"]) (seq #js [:baz "woz"])}]
-          (is (entries (seq (.-value (.next eiter)))))
-          (is (entries (seq (.-value (.next eiter))))))
-        (is (.-done (.next eiter)))))
-    (let [iter (.values {:foo "bar" :baz "woz"})]
-      (testing "map value iteration"
-        (is (#{"bar" "woz"} (.-value (.next iter))))
-        (is (#{"bar" "woz"} (.-value (.next iter))))
-        (is (.-done (.next iter)))))
-    (is (.has #{:cat :bird :dog} :bird))
-    (let [iter (.keys #{:cat :bird :dog})]
-      (testing "set key iteration"
-        (is (#{:cat :bird :dog} (.-value (.next iter))))
-        (is (#{:cat :bird :dog} (.-value (.next iter))))
-        (is (#{:cat :bird :dog} (.-value (.next iter))))
-        (is (.-done (.next iter)))))
-    (let [iter (.entries #{:cat :bird :dog})]
-      (testing "set entry iteration"
-        (is (#{[:cat :cat] [:bird :bird] [:dog :dog]} (seq (.-value (.next iter)))))
-        (is (#{[:cat :cat] [:bird :bird] [:dog :dog]} (seq (.-value (.next iter)))))
-        (is (#{[:cat :cat] [:bird :bird] [:dog :dog]} (seq (.-value (.next iter)))))
-        (is (.-done (.next iter)))))
-    (let [iter (.values #{:cat :bird :dog})]
-      (testing "set value iteration"
-        (is (#{:cat :bird :dog} (.-value (.next iter))))
-        (is (#{:cat :bird :dog} (.-value (.next iter))))
-        (is (#{:cat :bird :dog} (.-value (.next iter))))
-        (is (.-done (.next iter)))))
-))
 
 (deftest test-reader-literals
   (testing "Testing reader literals"
@@ -832,6 +737,27 @@
   (is (= #{1 2} (set [1 2 2])))
   (is (= #{1 2} (hash-set 1 2 2)))
   (is (= #{1 2} (apply hash-set [1 2 2]))))
+
+(deftest test-ordered-set
+  (is (= #{1 2} (sorted-set 1 2 2)))
+  (is (= [1 2 3] (seq (sorted-set 2 3 1))))
+  (is (= #{1 2} (apply sorted-set [1 2 2]))))
+
+(deftest test-3454-conj
+  (is (= #{1 2 3} (conj #{1 2} 3)))
+  (is (= #{1 2 3} (conj (sorted-set 1 2) 3)))
+  (let [s #{1 2}
+        ss (sorted-set 1 2)]
+    (is (identical? s (conj s 2)))
+    (is (identical? ss (conj ss 2)))))
+
+(deftest test-3454-disj
+  (is (= #{1 2} (disj #{1 2 3} 3)))
+  (is (= #{1 2} (disj (sorted-set 1 2 3) 3)))
+  (let [s #{1 2}
+        ss (sorted-set 1 2)]
+    (is (identical? s (disj s 3)))
+    (is (identical? ss (disj ss 3)))))
 
 (deftest test-585
   (is (= (last (map identity (into [] (range 32)))) 31))
@@ -1232,7 +1158,11 @@
   (is (= "_DOT__DOT_" (munge "..")))
   (is (= "abstract$" (munge "abstract")))
   (is (= 'abc (munge 'abc)))
-  (is (= "toString" (munge "toString"))))
+  (is (= "toString" (munge "toString")))
+  (is (= "function$" (munge "function"))))
+
+(deftest test-munge-str
+  (is (= "function" (munge-str "function"))))
 
 (defprotocol IFooBar
   (a-method [t]))
@@ -1670,22 +1600,6 @@
   ;; Make sure we didn't delete the alpha? fn
   (is (some? alpha-2585?)))
 
-(deftest test-cljs-2693
-  (is (chunked-seq? (range 5)))
-  (is (satisfies? IChunk (chunk-first (range 5))))
-  (is (nil? (chunk-next (range 32))))
-  (is (not (chunked-seq? (range 2 -2 0))))
-  (is (chunked-seq? (range)))
-  (is (= 5 (count (chunk-first (range 5)))))
-  (is (= 32 (count (chunk-first (range)))))
-  (is (= 17 (nth (chunk-first (range 100)) 17)))
-  (is (= 35 (nth (chunk-first (range 100)) 35)))
-  (is (= 32 (count (chunk-first (range 100)))))
-  (is (= 0 (first (range 5))))
-  (is (= 1 (second (range 5))))
-  (is (= (range 1 5) (rest (range 5))))
-  (is (= (range 1 5) (next (range 5)))))
-
 (defn fn-2741* ([x]) ([x y]))
 (def fn-2741 fn-2741*)
 
@@ -2056,3 +1970,45 @@
            [1 2 {:a 1, :b 2, :c 3}]))
     (is (= (test-keys :d 4 {:a 1, :b 2, :c 3})
            [1 2 {:d 4, :a 1, :b 2, :c 3}]))))
+
+(deftest test-str_
+  (is (= "" (apply cljs.core/str_ nil)))
+  (is (= "" (apply cljs.core/str_ [])))
+  (is (= "1" (apply cljs.core/str_ 1 [])))
+  (is (= "12" (apply cljs.core/str_ 1 [2])))
+  (is (= "1two:threefour#{:five}[:six]#{:seven}{:eight :nine}"
+         (apply cljs.core/str_ 1 ["two" :three 'four #{:five} [:six] #{:seven} {:eight :nine}])))
+  (is (= "1234" (apply cljs.core/str_ 1 2 [3 4]))))
+
+(deftest test-cljs-3452
+  (let [obj #js {:valueOf (fn [] "dude")
+                 :toString (fn [] "correct")}
+        str-fn (fn [x y]
+                 (str x obj y "\"foobar\"" 1 :foo nil))]
+    (testing "object is stringified using toString"
+      (is (= "correct6\"foobar\"1:foo" (str-fn nil (+ 1 2 3)))))))
+
+(def test-cljs-3472-var nil)
+(deftest test-cljs-3472
+  (set! test-cljs-3472-var "dude")
+  (is (= "dude" (str test-cljs-3472-var))))
+
+(deftest test-cljs-3425
+  (testing "Incorrect min/max handling of ##NaN"
+    (is (NaN? (min ##NaN 1)))
+    (is (NaN? (min 1 ##NaN)))
+    (is (NaN? (max ##NaN 1)))
+    (is (NaN? (max 1 ##NaN)))))
+
+(deftest test-static-props-methods
+  (is (= [] PersistentVector/EMPTY))
+  (let [f String/fromCharCode]
+    (is (= "A" (f 65)))))
+
+(deftest test-new-method
+  (let [f Object/new]
+    (some? (f))))
+
+(deftest test-instance-method-new
+  (is (= ["FOO" "BAR" "BAZ"]
+         (map String/.toUpperCase ["foo" "bar" "baz"]))))

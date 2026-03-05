@@ -6,7 +6,7 @@
 ;; the terms of this license.
 ;; You must not remove this notice, or any other, from this software.
 
-(ns test-runner
+(ns lite-test-runner
   (:require [cljs.qualified-method-test]
             [cljs.proxy-test]
             [cljs.test :refer-macros [run-tests]]
@@ -18,8 +18,8 @@
             [cljs.seqs-test]
             [cljs.collections-test]
             [cljs.hashing-test]
-            [cljs.core-test :as core-test]
-            [cljs.chunked-seq]
+            [cljs.core-test]
+            ;; [cljs.chunked-seq] ;; doesn't exist in :lite-mode
             [cljs.interop-test]
             [cljs.iterator-test]
             [cljs.reader-test]
@@ -48,8 +48,8 @@
             [cljs.specials-test]
             [cljs.spec.test-test]
             [cljs.clojure-alias-test]
-            [cljs.hash-map-test]
-            [cljs.map-entry-test]
+            ;; [cljs.hash-map-test]
+            ;; [cljs.map-entry-test]
             [cljs.metadata-test]
             [cljs.npm-deps-test]
             [cljs.other-functions-test]
@@ -62,6 +62,7 @@
             [cljs.inference-test]
             [cljs.walk-test]
             [cljs.repl-test]
+            [cljs.lite-collections-test]
             [cljs.extend-to-native-test]
             [cljs.var-test]))
 
@@ -78,17 +79,18 @@
   'cljs.apply-test
   'cljs.primitives-test
   'cljs.destructuring-test
-  'cljs.new-new-test
   'cljs.printing-test
+  'cljs.new-new-test
   'cljs.seqs-test
   'cljs.collections-test
   'cljs.hashing-test
   'cljs.core-test
-  'cljs.chunked-seq
-  'cljs.interop-test
+  'cljs.interop-test ;; ES6 stuff
   'cljs.iterator-test
   'cljs.reader-test
+  'cljs.binding-test
   'cljs.parse-test
+  'cljs.ns-test
   'clojure.set-test
   'clojure.string-test
   'clojure.data-test
@@ -96,29 +98,25 @@
   'clojure.edn-test
   'clojure.walk-test
   'clojure.math-test
-  'cljs.letfn-test
-  'cljs.reducers-test
-  'cljs.binding-test
   'cljs.macro-test
-  'cljs.top-level
-  'cljs.keyword-test
-  'cljs.ns-test
-  'cljs.ns-test.foo
+  'cljs.letfn-test
   'foo.ns-shadow-test
+  'cljs.top-level
+  'cljs.reducers-test
+  'cljs.keyword-test
   'cljs.import-test
+  'cljs.ns-test.foo
+  'cljs.syntax-quote-test
   'cljs.pprint
+  'cljs.pprint-test
   'cljs.spec-test
   'cljs.specials-test
   'cljs.spec.test-test
   'cljs.clojure-alias-test
-  'cljs.hash-map-test
-  'cljs.map-entry-test
   'cljs.metadata-test
   'cljs.npm-deps-test
   'cljs.other-functions-test
-  'cljs.pprint-test
   'cljs.predicates-test
-  'cljs.syntax-quote-test
   'cljs.tagged-literals-test
   'cljs.test-test
   'static.core-test
@@ -127,5 +125,6 @@
   'cljs.inference-test
   'cljs.walk-test
   'cljs.repl-test
+  'cljs.lite-collections-test
   'cljs.extend-to-native-test
   'cljs.var-test)

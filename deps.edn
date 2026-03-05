@@ -1,6 +1,6 @@
 {:paths ["src/main/clojure" "src/main/cljs" "resources"]
  :deps
- {com.google.javascript/closure-compiler {:mvn/version "v20250402"}
+ {com.google.javascript/closure-compiler {:mvn/version "v20250820"}
   com.cognitect/transit-java {:mvn/version "1.0.362"}
   org.clojure/clojure {:mvn/version "1.10.0"}
   org.clojure/core.specs.alpha {:mvn/version "0.1.24"}
@@ -9,7 +9,13 @@
   org.clojure/tools.reader {:mvn/version "1.3.6"}
   org.clojure/test.check {:mvn/version "1.1.1"}}
  :aliases
- {:cli.test.run          {:extra-paths ["src/test/cljs_cli"]
+ {:cljs-repl             {:extra-paths ["src/test/cljs"]
+                          :main-opts ["-m" "cljs.main" "-re" "node" "-d" ".cljs_repl" "-r"]}
+  :cljs-brepl            {:extra-paths ["src/test/cljs"]
+                          :main-opts ["-m" "cljs.main" "-d" ".cljs_brepl" "-r"]}
+  :cljs-lite-repl        {:extra-paths ["src/test/cljs"]
+                          :main-opts ["-m" "cljs.main" "-co" "{:lite-mode true}" "-re" "node" "-d" ".cljs_lite_repl" "-r"]}
+  :cli.test.run          {:extra-paths ["src/test/cljs_cli"]
                           :main-opts ["-i" "src/test/cljs_cli/cljs_cli/test_runner.clj"
                                       "-e" "(cljs-cli.test-runner/-main)"]}
   :compiler.test         {:extra-paths ["src/test/cljs" "src/test/cljs_build" "src/test/cljs_cp"
@@ -19,6 +25,8 @@
                                       "-e" "(cljs.test-runner/-main)"]}
   :runtime.test.build    {:extra-paths ["src/test/cljs"]
                           :main-opts ["-m" "cljs.main" "-co" "resources/test.edn" "-c"]}
+  :lite.test.build       {:extra-paths ["src/test/cljs"]
+                          :main-opts ["-m" "cljs.main" "-co" "resources/lite_test.edn" "-c"]}
   :selfhost.test.build   {:extra-paths ["src/test/self"]
                           :main-opts ["-m" "cljs.main" "-co" "resources/self_host_test.edn" "-c"]}
   :selfparity.test.build {:extra-paths ["src/test/self"]

@@ -12,7 +12,7 @@
                             defprotocol defrecord defstruct deftype delay destructure doseq dosync dotimes doto
                             extend-protocol extend-type fn for future gen-class gen-interface
                             if-let if-not import io! lazy-cat lazy-seq let letfn locking loop
-                            memfn ns or proxy proxy-super pvalues refer-clojure reify sync time
+                            memfn ns or proxy proxy-super pvalues reify sync time
                             when when-first when-let when-not while with-bindings with-in-str
                             with-loading-context with-local-vars with-open with-out-str with-precision with-redefs
                             satisfies? identical? true? false? number? nil? instance? symbol? keyword? string? str get
@@ -849,22 +849,44 @@
 (core/defn- string-expr [e]
   (vary-meta e assoc :tag 'string))
 
-(core/defmacro str
+(core/defmacro str_
   ([] "")
   ([x]
    (if (typed-expr? &env x '#{string})
      x
-     (string-expr (core/list 'js* "cljs.core.str.cljs$core$IFn$_invoke$arity$1(~{})" x))))
+     (string-expr (core/list 'js* "cljs.core.str_(~{})" x))))
   ([x & ys]
    (core/let [interpolate (core/fn [x]
                             (if (typed-expr? &env x '#{string clj-nil})
                               "~{}"
-                              "cljs.core.str.cljs$core$IFn$_invoke$arity$1(~{})"))
+                              "cljs.core.str_(~{})"))
               strs        (core/->> (core/list* x ys)
                             (map interpolate)
                             (interpose ",")
                             (apply core/str))]
      (string-expr (list* 'js* (core/str "[" strs "].join('')") x ys)))))
+
+(core/defn- compile-time-constant? [x]
+  (core/or
+   (core/string? x)
+   (core/keyword? x)
+   (core/boolean? x)
+   (core/number? x)))
+
+;; TODO: should probably be a compiler pass to avoid the code duplication
+(core/defmacro str
+  [& xs]
+  (core/let [interpolate (core/fn [x]
+                           (core/cond
+                             (compile-time-constant? x)
+                             ["+~{}" x]
+                             :else
+                             ;; Note: can't assume non-nil despite tag here, so we go through str 1-arity
+                             ["+cljs.core.str.cljs$core$IFn$_invoke$arity$1(~{})" x]))
+             strs+args (keep interpolate xs)
+             strs (string/join (map first strs+args))
+             args (map second strs+args)]
+    (string-expr (list* 'js* (core/str "(\"\"" strs ")") args))))
 
 (core/defn- bool-expr [e]
   (vary-meta e assoc :tag 'boolean))
@@ -1177,17 +1199,21 @@
 (core/defmacro ^::ana/numeric neg? [x]
   `(< ~x 0))
 
-(core/defmacro ^::ana/numeric max
+(core/defmacro ^::ana/numeric unchecked-max
   ([x] x)
-  ([x y] `(let [x# ~x, y# ~y]
-            (~'js* "((~{} > ~{}) ? ~{} : ~{})" x# y# x# y#)))
-  ([x y & more] `(max (max ~x ~y) ~@more)))
+  ([x y]
+   `(let [x# ~x, y# ~y]
+      (if (> x# y#) x# y#)))
+  ([x y & more]
+   `(max (max ~x ~y) ~@more)))
 
-(core/defmacro ^::ana/numeric min
+(core/defmacro ^::ana/numeric unchecked-min
   ([x] x)
-  ([x y] `(let [x# ~x, y# ~y]
-            (~'js* "((~{} < ~{}) ? ~{} : ~{})" x# y# x# y#)))
-  ([x y & more] `(min (min ~x ~y) ~@more)))
+  ([x y]
+   `(let [x# ~x, y# ~y]
+      (if (< x# y#) x# y#)))
+  ([x y & more]
+   `(min (min ~x ~y) ~@more)))
 
 (core/defmacro ^::ana/numeric js-mod [num div]
   (core/list 'js* "(~{} % ~{})" num div))
@@ -1208,8 +1234,9 @@
   ([x y] (core/list 'js* "(~{} | ~{})" x y))
   ([x y & more] `(bit-or (bit-or ~x ~y) ~@more)))
 
-(core/defmacro ^::ana/numeric int [x]
-  `(bit-or ~x 0))
+(core/defmacro int
+  [x]
+  (core/list 'js* "(~{} | 0)" x))
 
 (core/defmacro ^::ana/numeric bit-xor
   ([x y] (core/list 'js* "(~{} ^ ~{})" x y))
@@ -1365,7 +1392,7 @@
   [& impls]
   (core/let [t        (with-meta
                         (gensym
-                          (core/str "t_"
+                          (core/str "t_reify_"
                             (string/replace (core/str (munge ana/*cljs-ns*)) "." "$")))
                         {:anonymous true})
              meta-sym (gensym "meta")
@@ -1382,7 +1409,11 @@
            IMeta
            (~'-meta [~this-sym] ~meta-sym)
            ~@impls))
-       (new ~t ~@locals ~(ana/elide-reader-meta (meta &form))))))
+       (new ~t ~@locals
+         ;; if the form meta is empty, emit nil
+         ~(core/let [form-meta (ana/elide-reader-meta (meta &form))]
+            (core/when-not (empty? form-meta)
+              form-meta))))))
 
 (core/defmacro specify!
   "Identical to reify but mutates its first argument."
@@ -1485,13 +1516,18 @@
         ~@body))))
 
 (core/defn- add-obj-methods [type type-sym sigs]
-  (map (core/fn [[f & meths :as form]]
-         (core/let [[f meths] (if (vector? (first meths))
-                                [f [(rest form)]]
-                                [f meths])]
-           `(set! ~(extend-prefix type-sym f)
-              ~(with-meta `(fn ~@(map #(adapt-obj-params type %) meths)) (meta form)))))
-    sigs))
+  (core/->> sigs
+    ;; Elide all toString methods in :lite-mode
+    (remove
+      (core/fn [[f]]
+        (core/and (ana/elide-to-string?) (core/= 'toString f))))
+    (map
+      (core/fn [[f & meths :as form]]
+        (core/let [[f meths] (if (vector? (first meths))
+                               [f [(rest form)]]
+                               [f meths])]
+          `(set! ~(extend-prefix type-sym f)
+             ~(with-meta `(fn ~@(map #(adapt-obj-params type %) meths)) (meta form))))))))
 
 (core/defn- ifn-invoke-methods [type type-sym [f & meths :as form]]
   (map
@@ -1789,17 +1825,22 @@
   [t fields & impls]
   (validate-fields "deftype" t fields)
   (core/let [env &env
-             r (:name (cljs.analyzer/resolve-var (dissoc env :locals) t))
+             v (cljs.analyzer/resolve-var (dissoc env :locals) t)
+             r (:name v)
              [fpps pmasks] (prepare-protocol-masks env impls)
              protocols (collect-protocols impls env)
              t (vary-meta t assoc
                  :protocols protocols
-                 :skip-protocol-flag fpps) ]
+                 :skip-protocol-flag fpps)]
     `(do
        (deftype* ~t ~fields ~pmasks
          ~(if (seq impls)
             `(extend-type ~t ~@(dt->et t impls fields))))
-       (set! (.-getBasis ~t) (fn [] '[~@fields]))
+       ;; don't emit static basis method w/ reify
+       ;; nor for core types
+       ~@(core/when-not (core/or (string/starts-with? (name t) "t_reify")
+                                 (= 'cljs.core (:ns v)))
+           [`(set! (.-getBasis ~t) (fn [] '[~@fields]))])
        (set! (.-cljs$lang$type ~t) true)
        (set! (.-cljs$lang$ctorStr ~t) ~(core/str r))
        (set! (.-cljs$lang$ctorPrWriter ~t) (fn [this# writer# opt#] (-write writer# ~(core/str r))))
@@ -3089,6 +3130,20 @@
   [& args]
   `(~'ns* ~(cons :refer-clojure args)))
 
+(core/defmacro refer-global
+  "Refer global js vars. Supports renaming via :rename.
+
+  (refer-global :only '[Date Symbol] :rename '{Symbol Sym})"
+  [& args]
+  `(~'ns* ~(cons :refer-global args)))
+
+(core/defmacro require-global
+  "Require libraries in the global JS environment.
+
+  (require-global '[SomeLib :as lib :refer [foo]])"
+  [& args]
+  `(~'ns* ~(cons :require-global args)))
+
 ;; INTERNAL - do not use, only for Node.js
 (core/defmacro load-file* [f]
   `(goog/nodeGlobalRequire ~f))
@@ -3287,9 +3342,9 @@
                            argseq#))))
                   (if (:macro meta)
                     `(throw (js/Error.
-                             (str "Invalid arity: " (- (alength (js-arguments)) 2))))
+                             (.join (array "Invalid arity: " (- (alength (js-arguments)) 2)) "")))
                     `(throw (js/Error.
-                             (str "Invalid arity: " (alength (js-arguments))))))))))
+                             (.join (array "Invalid arity: " (alength (js-arguments))) ""))))))))
          ~@(map #(fn-method name %) fdecl)
          ;; optimization properties
          (set! (. ~name ~'-cljs$lang$maxFixedArity) ~maxfa)

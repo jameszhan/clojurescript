@@ -182,7 +182,7 @@
 
 (defn send-static
   [{path :path :as request} conn
-   {:keys [static-dir output-dir host port gzip?] :or {output-dir "out"} :as opts}]
+   {:keys [static-dir output-dir host port gzip? compiler-opts] :or {output-dir "out"} :as opts}]
   (let [output-dir (when-not (.isAbsolute (io/file output-dir)) output-dir)]
     (if (and static-dir (not= "/favicon.ico" path))
       (let [path (if (= "/" path) "/index.html" path)
@@ -224,7 +224,11 @@
                                       clojure.browser.repl/PORT ~port}
                                   (merge (:closure-defines @browser-state))
                                   cljsc/normalize-closure-defines
-                                  json/write-str)]
+                                  json/write-str)
+                preloads (when-let [preloads (:preloads compiler-opts)]
+                           (mapv (fn [ns-symb]
+                                   (str "document.write('<script>goog.require(\"" (munge ns-symb) "\");</script>');"))
+                                 preloads))]
             (server/send-and-close conn 200
               (str "var CLOSURE_UNCOMPILED_DEFINES = " closure-defines ";\n"
                    "var CLOSURE_NO_DEPS = true;\n"
@@ -233,6 +237,7 @@
                    (when (.exists (io/file output-dir "cljs_deps.js"))
                      (str "document.write('<script src=\"" output-dir "/cljs_deps.js\"></script>');\n"))
                    "document.write('<script src=\"" output-dir "/brepl_deps.js\"></script>');\n"
+                   (when preloads (str/join "\n" preloads))
                    "document.write('<script>goog.require(\"clojure.browser.repl.preload\");</script>');\n")
               "text/javascript" "UTF-8"))
 
@@ -349,21 +354,27 @@
 (defn- waiting-to-connect-message [url]
   (print-str "Waiting for browser to connect to" url "..."))
 
-(defn- maybe-browse-url [base-url]
-  (try
-    (browse/browse-url (str base-url "?rel=" (System/currentTimeMillis)))
-    (catch Throwable t
-      (if-some [error-message (not-empty (.getMessage t))]
-        (println "Failed to launch a browser:\n" error-message "\n")
-        (println "Could not launch a browser.\n"))
-      (println "You can instead launch a non-browser REPL (Node or Nashorn).\n")
-      (println "You can disable automatic browser launch with this REPL option")
-      (println "  :launch-browser false")
-      (println "and you can specify the listen IP address with this REPL option")
-      (println "  :host \"127.0.0.1\"\n")
-      (println (waiting-to-connect-message base-url)))))
+(defn- maybe-browse-url
+  ([base-url]
+   (maybe-browse-url base-url false))
+  ([base-url new-window]
+   (try
+     (browse/browse-url
+       (cond-> base-url
+         new-window (str "?rel=" (System/currentTimeMillis))))
+     (catch Throwable t
+       (if-some [error-message (not-empty (.getMessage t))]
+         (println "Failed to launch a browser:\n" error-message "\n")
+         (println "Could not launch a browser.\n"))
+       (println "You can instead launch a non-browser REPL (Node or Nashorn).\n")
+       (println "You can disable automatic browser launch with this REPL option")
+       (println "  :launch-browser false")
+       (println "and you can specify the listen IP address with this REPL option")
+       (println "  :host \"127.0.0.1\"\n")
+       (println (waiting-to-connect-message base-url)))))
+)
 
-(defn setup [{:keys [working-dir launch-browser server-state] :as repl-env} {:keys [output-dir] :as opts}]
+(defn setup [{:keys [working-dir launch-browser new-window server-state] :as repl-env} {:keys [output-dir] :as opts}]
   (locking lock
     (when-not (:socket @server-state)
       (binding [browser-state (:browser-state repl-env)
@@ -391,7 +402,7 @@
         (server/start repl-env)
         (let [base-url (str "http://" (:host repl-env) ":" (:port repl-env))]
           (if launch-browser
-            (maybe-browse-url base-url)
+            (maybe-browse-url base-url new-window)
             (println (waiting-to-connect-message base-url)))))))
   (.put outs (thread-name) *out*)
   (swap! server-state update :listeners inc))
@@ -458,8 +469,9 @@
     {:host host
      :port port
      :launch-browser true
+     :new-window false
      :working-dir (->> [".repl" (util/clojurescript-version)]
-                       (remove empty?) (string/join "-"))
+                    (remove empty?) (string/join "-"))
      :static-dir (cond-> ["." "out/"] output-dir (conj output-dir))
      :preloaded-libs []
      :src "src/"

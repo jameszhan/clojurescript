@@ -185,7 +185,6 @@
    :report-unknown-types DiagnosticGroups/REPORT_UNKNOWN_TYPES
    :strict-missing-properties DiagnosticGroups/STRICT_MISSING_PROPERTIES
    :strict-module-dep-check DiagnosticGroups/STRICT_MODULE_DEP_CHECK
-   :strict-requires DiagnosticGroups/STRICT_REQUIRES
    :suspicious-code DiagnosticGroups/SUSPICIOUS_CODE
    :too-many-type-params DiagnosticGroups/TOO_MANY_TYPE_PARAMS
    :tweaks DiagnosticGroups/TWEAKS
@@ -211,7 +210,8 @@
     :watch :watch-error-fn :watch-fn :install-deps :process-shim :rename-prefix :rename-prefix-namespace
     :closure-variable-map-in :closure-property-map-in :closure-variable-map-out :closure-property-map-out
     :stable-names :ignore-js-module-exts :opts-cache :aot-cache :elide-strict :fingerprint :spec-skip-macros
-    :nodejs-rt :target-fn :deps-cmd :bundle-cmd :global-goog-object&array :node-modules-dirs})
+    :nodejs-rt :target-fn :deps-cmd :bundle-cmd :global-goog-object&array :node-modules-dirs :lite-mode
+    :elide-to-string})
 
 (def string->charset
   {"iso-8859-1" StandardCharsets/ISO_8859_1
@@ -1126,13 +1126,17 @@
   (let [requires    (set (mapcat deps/-requires inputs))
         required-js (js-dependencies opts requires)]
     (concat
-      (map
-        (fn [{:keys [foreign url file provides requires] :as js-map}]
-          (let [url (or url (io/resource file))]
-            (merge
-              (javascript-file foreign url provides requires)
-              js-map)))
-        required-js)
+      (->> required-js
+        ;; :foreign-libs which declare :external? have no sources (they are included
+        ;; on the page via some script tag we'll never see). :require-global libs are
+        ;; implicit :foreign-libs where :external? is true
+        (remove :external?)
+        (map
+          (fn [{:keys [foreign url file provides requires] :as js-map}]
+            (let [url (or url (io/resource file))]
+              (merge
+                (javascript-file foreign url provides requires)
+                js-map)))))
       (when (-> @env/*compiler* :options :emit-constants)
         [(constants-javascript-file opts)])
       inputs)))
@@ -1389,11 +1393,12 @@
         (let [source (first sources)]
           (recur
             (next sources)
-            (let [{:keys [provides source-url]} source]
-              (if (and provides source-url)
+            (let [{:keys [provides]} source
+                  url (or (:source-url source) (:url source))]
+              (if (and provides url)
                 (assoc relpaths
-                  (.getPath ^URL source-url)
-                  (util/ns->relpath (first provides) (util/ext source-url)))
+                  (.getPath ^URL url)
+                  (util/ns->relpath (first provides) (util/ext url)))
                 relpaths))
             (if-let [url (:url source)]
               (let [path (.getPath ^URL url)]
@@ -1410,19 +1415,19 @@
         (spit
           (io/file name)
           (sm/encode merged
-            {:preamble-line-count (+ (:preamble-line-count opts 0)
-                                     (:foreign-deps-line-count opts 0))
-             :lines (+ (:lineCount sm-json)
-                       (:preamble-line-count opts 0)
-                       (:foreign-deps-line-count opts 0)
-                       2)
-             :file name
-             :output-dir (util/output-directory opts)
-             :source-map (:source-map opts)
-             :source-map-path (:source-map-path opts)
-             :source-map-timestamp (:source-map-timestamp opts)
+            {:preamble-line-count     (+ (:preamble-line-count opts 0)
+                                        (:foreign-deps-line-count opts 0))
+             :lines                   (+ (:lineCount sm-json)
+                                        (:preamble-line-count opts 0)
+                                        (:foreign-deps-line-count opts 0)
+                                        2)
+             :file                    name
+             :output-dir              (util/output-directory opts)
+             :source-map              (:source-map opts)
+             :source-map-path         (:source-map-path opts)
+             :source-map-timestamp    (:source-map-timestamp opts)
              :source-map-pretty-print (:source-map-pretty-print opts)
-             :relpaths relpaths}))))))
+             :relpaths                relpaths}))))))
 
 (defn write-variable-maps [^Result result opts]
   (let [var-out (:closure-variable-map-out opts)]
@@ -1603,7 +1608,15 @@
          "], ["
          ;; even under Node.js where runtime require is possible
          ;; this is necessary - see CLJS-2151
-         (ns-list (cond->> (deps/-requires input)
+         (ns-list (cond->>
+                      ;; remove the global js namespace, it's not real
+                      ;;   comes from :refer-global
+                      ;; remove external? foreign deps - they are already loaded
+                      ;;   in the environment, there is nothing to do.
+                      ;;   :require-global is the typical case here
+                      (->> (deps/-requires input) ;; returns nses as strings, not symbols
+                        (remove #{"js"})
+                        (remove ana/external-dep?))
                     ;; under Node.js we emit native `require`s for these
                     (= :nodejs (:target opts))
                     (filter (complement ana/node-module-dep?))))
@@ -1960,13 +1973,7 @@
         (.toSource closure-compiler ast-root)))))
 
 (defn- sorting-dependency-options []
-  (try
-    (if (contains? (:flags (clojure.reflect/reflect DependencyOptions)) :abstract)
-      (eval '(do
-               (import '(com.google.javascript.jscomp DependencyOptions))
-               (DependencyOptions/sortOnly)))
-      (doto (DependencyOptions.)
-        (.setDependencySorting true)))))
+  (DependencyOptions/sortOnly))
 
 (defn convert-js-modules
   "Takes a list JavaScript modules as an IJavaScript and rewrites them into a Google
@@ -2516,8 +2523,14 @@
           :ups-foreign-libs (expand-libs foreign-libs)
           :ups-externs externs
           :emit-constants emit-constants
-          :cache-analysis-format (:cache-analysis-format opts :transit))
-        (update-in [:preamble] #(into (or % []) ["cljs/imul.js"])))
+          :cache-analysis-format (:cache-analysis-format opts :transit)))
+     
+      (not (:lite-mode opts))
+      (update-in [:preamble] #(into (or % []) ["cljs/imul.js"]))
+
+      (:lite-mode opts)
+      (assoc-in [:closure-defines (str (comp/munge 'cljs.core/LITE_MODE))]
+        (:lite-mode opts))
 
       (:target opts)
       (assoc-in [:closure-defines (str (comp/munge 'cljs.core/*target*))]

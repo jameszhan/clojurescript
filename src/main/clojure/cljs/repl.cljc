@@ -256,7 +256,12 @@
   ([repl-env requires]
    (load-dependencies repl-env requires nil))
   ([repl-env requires opts]
-   (doall (mapcat #(load-namespace repl-env % opts) (distinct requires)))))
+   (->> requires
+     distinct
+     (remove ana/global-ns?)
+     (remove ana/external-dep?)
+     (mapcat #(load-namespace repl-env % opts))
+     doall)))
 
 (defn ^File js-src->cljs-src
   "Map a JavaScript output file back to the original ClojureScript source
@@ -604,7 +609,9 @@
                          env/*compiler*)
                        (cljsc/compile src
                          (assoc opts
-                           :output-file (cljsc/src-file->target-file src)
+                           ;; need to set opts to nil here so that we don't 
+                           ;; double up output-dir
+                           :output-file (cljsc/src-file->target-file src nil)
                            :force true
                            :mode :interactive)))]
         ;; copy over the original source file if source maps enabled
@@ -652,7 +659,7 @@
 (defn- wrap-fn [form]
   (cond
     (and (seq? form)
-         (#{'ns 'require 'require-macros
+         (#{'ns 'require 'require-macros 'refer-global 'require-global
             'use 'use-macros 'import 'refer-clojure} (first form)))
     identity
 
@@ -673,7 +680,7 @@
 (defn- init-wrap-fn [form]
   (cond
     (and (seq? form)
-      (#{'ns 'require 'require-macros
+      (#{'ns 'require 'require-macros 'refer-global
          'use 'use-macros 'import 'refer-clojure} (first form)))
     identity
 
@@ -1454,8 +1461,14 @@ itself (not its value) is returned. The reader macro #'x expands to (var x)."}})
               (ana-api/resolve &env name)
               `(cljs.repl/print-doc
                  (quote ~(let [var (ana-api/resolve &env name)
-                               m (select-keys var
-                                   [:ns :name :doc :forms :arglists :macro :url])]
+                               ns  (-> var :name namespace)
+                               m   (cond-> var
+                                     (= "js" ns)
+                                     (-> :name ana-api/resolve-extern
+                                       (select-keys [:doc :arglists])
+                                       (merge {:name name}))
+                                     (not= "js" ns)
+                                     (select-keys [:ns :name :doc :forms :arglists :macro :url]))]
                            (cond-> (update-in m [:name] clojure.core/name)
                              (:protocol-symbol var)
                              (assoc :protocol true

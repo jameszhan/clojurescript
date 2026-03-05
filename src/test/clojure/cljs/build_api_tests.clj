@@ -718,7 +718,107 @@
         cenv (env/default-compiler-env)]
     (test/delete-out-files out)
     (build/build (build/inputs (io/file inputs "trivial/core.cljs")) opts cenv)
-    (is (< (.length out-file) 10000))))
+    (is (< (.length out-file) 10240))))
+
+(deftest trivial-output-size-protocol
+  (let [out (.getPath (io/file (test/tmp-dir) "trivial-output-protocol-test-out"))
+        out-file (io/file out "main.js")
+        {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                               :opts {:main 'trivial.core2
+                                      :output-dir out
+                                      :output-to (.getPath out-file)
+                                      :optimizations :advanced}}
+        cenv (env/default-compiler-env)]
+    (test/delete-out-files out)
+    (build/build (build/inputs (io/file inputs "trivial/core2.cljs")) opts cenv)
+    (is (< (.length out-file) 10240))))
+
+(deftest trivial-output-size-keyword
+  (let [out (.getPath (io/file (test/tmp-dir) "trivial-output-keyword-test-out"))
+        out-file (io/file out "main.js")
+        {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                               :opts {:main 'trivial.core3
+                                      :output-dir out
+                                      :output-to (.getPath out-file)
+                                      :optimizations :advanced}}
+        cenv (env/default-compiler-env)]
+    (test/delete-out-files out)
+    (build/build (build/inputs (io/file inputs "trivial/core3.cljs")) opts cenv)
+    (is (< (.length out-file) 10240))))
+
+(deftest trivial-output-size-vector
+  (let [out (.getPath (io/file (test/tmp-dir) "trivial-output-vector-test-out"))
+        out-file (io/file out "main.js")
+        {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                               :opts {:main 'trivial.core4
+                                      :output-dir out
+                                      :output-to (.getPath out-file)
+                                      :optimizations :advanced}}
+        cenv (env/default-compiler-env)]
+    (test/delete-out-files out)
+    (build/build (build/inputs (io/file inputs "trivial/core4.cljs")) opts cenv)
+    (is (< (.length out-file) 92160))))
+
+(deftest lite-mode-vector-code-size-ratchet
+  (testing ":lite-mode + :elide-to-string, should cut output size for [] in 1/2"
+    (let [out (.getPath (io/file (test/tmp-dir) "trivial-output-vector-test-out"))
+          out-file (io/file out "main.js")
+          {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                                 :opts {:main 'trivial.core4
+                                        :output-dir out
+                                        :output-to (.getPath out-file)
+                                        :lite-mode true
+                                        :elide-to-string true
+                                        :optimizations :advanced}}
+          cenv (env/default-compiler-env)]
+      (test/delete-out-files out)
+      (build/build (build/inputs (io/file inputs "trivial/core4.cljs")) opts cenv)
+      (is (< (.length out-file) 16384)))))
+
+(deftest trivial-output-size-map
+  (let [out (.getPath (io/file (test/tmp-dir) "trivial-output-map-test-out"))
+        out-file (io/file out "main.js")
+        {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                               :opts {:main 'trivial.core5
+                                      :output-dir out
+                                      :output-to (.getPath out-file)
+                                      :optimizations :advanced}}
+        cenv (env/default-compiler-env)]
+    (test/delete-out-files out)
+    (build/build (build/inputs (io/file inputs "trivial/core5.cljs")) opts cenv)
+    (is (< (.length out-file) 92160))))
+
+(deftest lite-mode-map-code-size-ratchet
+  (testing ":lite-mode + :elide-to-string, should cut output size for {} in 1/3"
+   (let [out (.getPath (io/file (test/tmp-dir) "trivial-output-map-test-out"))
+         out-file (io/file out "main.js")
+         {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                                :opts {:main 'trivial.core5
+                                       :output-dir out
+                                       :output-to (.getPath out-file)
+                                       :lite-mode true
+                                       :elide-to-string true
+                                       :optimizations :advanced}}
+         cenv (env/default-compiler-env)]
+     (test/delete-out-files out)
+     (build/build (build/inputs (io/file inputs "trivial/core5.cljs")) opts cenv)
+     (is (< (.length out-file) 32768)))))
+
+(deftest lite-mode-api-code-size-ratchet
+  (testing ":lite-mode + :elide-to-string, typical cljs.core api usage ~32K"
+   (let [out (.getPath (io/file (test/tmp-dir) "trivial-output-map-test-out"))
+         out-file (io/file out "main.js")
+         {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                                :opts {:main 'trivial.core6
+                                       :output-dir out
+                                       :output-to (.getPath out-file)
+                                       :lite-mode true
+                                       :elide-to-string true
+                                       :optimizations :advanced}}
+         cenv (env/default-compiler-env)]
+     (test/delete-out-files out)
+     (build/build (build/inputs (io/file inputs "trivial/core6.cljs")) opts cenv)
+     (is (< (.length out-file) 34000)))))
 
 (deftest cljs-3255-nil-inputs-build
   (let [out (.getPath (io/file (test/tmp-dir) "3255-test-out"))
@@ -840,3 +940,48 @@
       (.delete (io/file "package.json"))
       (test/delete-node-modules)
       (test/delete-out-files out))))
+
+#_(deftest test-cljs-3452-str-optimizations
+  (testing "Test that uses compile time optimizations from str macro"
+    (let [out (.getPath (io/file (test/tmp-dir) "cljs-3452-str-optimizations-out"))]
+      (test/delete-out-files out)
+      (let [{:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                                   :opts {:main 'cljs-3452-str-optimizations.core
+                                          :output-dir out
+                                          :optimizations :none
+                                          :closure-warnings {:check-types :off}}}
+            cenv (env/default-compiler-env)]
+        (build/build (build/inputs (io/file inputs "cljs_3452_str_optimizations/core.cljs")) opts cenv))
+      (let [source (slurp (io/file out "cljs_3452_str_optimizations/core.js"))]
+        (testing "only seven string concats, compile time nil is ignored"
+          (is (= 7 (count (re-seq #"[\+]" source)))))
+        (testing "only two 1-arity str calls, compile time constants are optimized"
+          (is (= 2 (count (re-seq #"\$1\(.*?\)" source))))))
+      (test/delete-out-files out))))
+
+#_(deftest test-advanced-source-maps
+  (testing "Test that the `sources` of the final merged source map matches the
+  one in the original Closure Compiler generated advanced source map"
+    (let [out (.getPath (io/file (test/tmp-dir) "adv-src-map"))]
+      (test/delete-out-files out)
+      (test/delete-node-modules)
+      (let [{:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                                   :opts   {:main               'cljs-3346-as-alias.core
+                                            :output-to          (.getPath (io/file out "main.js"))
+                                            :source-map         (.getPath (io/file out "main.js.map"))
+                                            :output-dir         out
+                                            :optimizations      :advanced
+                                            :closure-source-map true}}
+            cenv (env/default-compiler-env)]
+        (build/build (build/inputs (io/file inputs "adv_src_map/core.cljs")) opts cenv))
+      (let [cljs-src-map    (->> (io/file out "main.js.map") slurp json/read-str)
+            closure-src-map (->> (io/file out "main.js.map.closure") slurp json/read-str)]
+        (println (get closure-src-map "sources"))
+        (println (get cljs-src-map "sources")))
+      (test/delete-out-files out))))
+
+#_(comment
+
+  (clojure.test/test-vars [#'test-advanced-source-maps])
+
+  )

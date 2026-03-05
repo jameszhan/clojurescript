@@ -307,11 +307,31 @@
   (is (= (env/with-compiler-env test-cenv
            (:tag (analyze test-env '(dissoc {:foo :bar} :foo))))
         '#{clj clj-nil}))
+  (is (= (env/with-compiler-env test-cenv
+           (:tag (analyze test-env '(distinct? 1))))
+        'boolean))
+  (is (= (env/with-compiler-env test-cenv
+           (:tag (analyze test-env '(special-symbol? 'foo))))
+        'boolean))
+  ;; TODO: we can't infer isa?, we get 'any which is a bit surprising
+  ;(is (= (env/with-compiler-env test-cenv
+  ;         (:tag (analyze test-env '(isa? ::foo :bar))))
+  ;      'boolean))
   ;; has changed, why does this return #{clj any} ?
   ;(is (= (env/with-compiler-env test-cenv
   ;         (:tag (analyze test-env '(assoc nil :foo :bar))))
   ;      'clj))
   )
+
+(deftest lib-inference-extern-call
+  (testing "Test return type inference for core fns whose
+  internal implementation uses standard JS APIs"
+    (is (= 'boolean
+          (env/with-compiler-env test-cenv
+            (:tag (analyze test-env '(array? (array)))))))
+    (is (= 'array
+          (env/with-compiler-env test-cenv
+            (:tag (analyze test-env '(make-array js/String. 10))))))))
 
 (deftest test-always-true-if
   (is (= (env/with-compiler-env test-cenv
@@ -330,10 +350,12 @@
            (cljs.env/with-compiler-env test-cenv
              (:tag (analyze test-env '(dec x)))))
         'number))
-  (is (= (ana/no-warn
-           (cljs.env/with-compiler-env test-cenv
-             (:tag (analyze test-env '(int x)))))
-        'number))
+  ;; we relaxed int, making it too strict just creates
+  ;; problems for legit coercion, Clojure is vague so we are vague :)
+  ;; (is (= (ana/no-warn
+  ;;          (cljs.env/with-compiler-env test-cenv
+  ;;            (:tag (analyze test-env '(int x)))))
+  ;;       'number))
   (is (= (ana/no-warn
            (cljs.env/with-compiler-env test-cenv
              (:tag (analyze test-env '(unchecked-int x)))))
@@ -374,3 +396,20 @@
                    (:import [goog.history Html5History]))
                  (Html5History.)]
                {} true))))))
+
+(deftest test-goog-infer
+  (is (= 'boolean
+        (:tag (env/with-compiler-env (env/default-compiler-env)
+                (ana/analyze-form-seq
+                  '[(ns test.foo
+                      (:require [goog.string :as gstring]))
+                    (gstring/contains "foobar" "foo")]
+                  {} true)))))
+  (is (= 'boolean
+        (:tag
+          (env/with-compiler-env (env/default-compiler-env)
+            (ana/analyze-form-seq
+              '[(ns test.foo
+                  (:require [goog.object :as gobject]))
+                (gobject/containsKey (js-object) "foo")]
+              {} true))))))
